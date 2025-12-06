@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Stack, useRouter } from "expo-router";
 import { View, StyleSheet } from "react-native";
 import { useSession } from "../../auth/ctx";
 import { setUnauthorizedHandler, apiService } from "../../services/api";
+import { useStorageState } from "../useStorageState";
 
 export const unstable_settings = {
   initialRouteName: "trail",
@@ -11,6 +12,8 @@ export const unstable_settings = {
 export default function AppLayout() {
   const router = useRouter();
   const { signOut, session } = useSession();
+  const [[loadingWelcome, welcomeSeen], setWelcomeSeen] = useStorageState("welcomeShownV2");
+  const [checkedWelcome, setCheckedWelcome] = useState(false);
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
@@ -34,11 +37,29 @@ export default function AppLayout() {
     checkSession();
   }, [session, router, signOut]);
 
+  // Verifica se é a primeira vez e redireciona para welcome
+  useEffect(() => {
+    if (loadingWelcome || checkedWelcome) return;
+
+    if (!welcomeSeen && session) {
+      setWelcomeSeen("1");
+      setCheckedWelcome(true);
+      // Pequeno delay para garantir que o layout está montado
+      setTimeout(() => {
+        router.replace("/(app)/welcome");
+      }, 100);
+    } else {
+      setCheckedWelcome(true);
+    }
+  }, [loadingWelcome, welcomeSeen, session, checkedWelcome]);
+
   return (
     <View style={styles.container}>
       <View style={styles.stackContainer}>
         <Stack>
           <Stack.Screen name="trail" options={{ headerShown: false }} />
+          <Stack.Screen name="welcome" options={{ headerShown: false }} />
+          <Stack.Screen name="exercise-intro" options={{ headerShown: false }} />
           <Stack.Screen name="task" options={{ headerShown: false }} />
           <Stack.Screen name="profile" options={{ headerShown: false }} />
           <Stack.Screen name="games/find-errors" options={{ headerShown: false }} />
