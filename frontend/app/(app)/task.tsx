@@ -145,6 +145,7 @@ export default function TaskScreen() {
           `Erros encontrados: ${res.found_errors}/${res.total_errors}`,
           [{ text: "OK", onPress: () => router.replace("/(app)/trail") }]
         );
+        setTimeout(() => router.replace("/(app)/trail"), 1200);
       } else {
         if (!res.correct) {
           Alert.alert("Errou", "Esse item não é um erro. Tente novamente.");
@@ -213,7 +214,8 @@ export default function TaskScreen() {
             session,
             attempt.attempt_id,
             med.category,
-            moduleIdParam
+            moduleIdParam,
+            med.id
           );
           score = result.final_score || result.xp_earned || 0;
         }

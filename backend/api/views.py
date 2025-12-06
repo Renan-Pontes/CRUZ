@@ -403,6 +403,7 @@ def _mark_module_completed(user, challenge_type: str, module_id: int | None = No
     ac, _ = AssignedChallenge.objects.get_or_create(
         user=user, module=module, challenge=challenge
     )
+    was_completed = ac.status == AssignedChallenge.Status.COMPLETED or ac.completed_at is not None
     ac.attempt_count = ac.attempt_count + 1
     now = timezone.now()
     if not ac.started_at:
@@ -418,7 +419,8 @@ def _mark_module_completed(user, challenge_type: str, module_id: int | None = No
     if ac.started_at == now:
         update_fields.append("started_at")
     ac.save(update_fields=update_fields)
-    return ac
+    newly_completed = not was_completed and ac.status == AssignedChallenge.Status.COMPLETED
+    return ac, newly_completed
 
 
 def _sync_leaderboard_entry(user):
@@ -1382,7 +1384,8 @@ def separacao_answer(request, attempt_id: int):
     med_input = payload.validated_data
 
     expected_med = meds[attempt.current_index]
-    if med_input["medication_id"] != expected_med["id"]:
+    incoming_med_id = med_input.get("medication_id") or expected_med.get("id")
+    if incoming_med_id != expected_med["id"]:
         raise exceptions.ValidationError("Resposta não corresponde ao próximo medicamento da fila.")
 
     is_correct = expected_med["category"] == med_input["chosen_category"]
@@ -1409,21 +1412,23 @@ def separacao_answer(request, attempt_id: int):
     )
 
     if attempt.completed:
-        ActivityLog.objects.create(
-            user=request.user,
-            activity_type=ActivityLog.ActivityType.CHALLENGE_COMPLETED,
-            message="Separação de medicamentos concluída",
-            details={
-                "correct": attempt.correct_count,
-                "total": total,
-                "accuracy": attempt.correct_count / total if total else 0,
-            },
-        )
-        _mark_module_completed(
+        ac, newly_completed = _mark_module_completed(
             request.user,
             ChallengeType.SEPARACAO,
             payload.validated_data.get("module_id"),
         )
+        if newly_completed:
+            ActivityLog.objects.create(
+                user=request.user,
+                activity_type=ActivityLog.ActivityType.CHALLENGE_COMPLETED,
+                message="Separação de medicamentos concluída",
+                details={
+                    "correct": attempt.correct_count,
+                    "total": total,
+                    "accuracy": attempt.correct_count / total if total else 0,
+                    "module_id": ac.module_id if ac else None,
+                },
+            )
         duration = (timezone.now() - attempt.created_at).total_seconds()
         profile = _ensure_profile(request.user)
         xp_gain = _xp_from_components(
@@ -1521,18 +1526,20 @@ def atendimento_submit(request):
             response_text, full_context, case.expected_response
         )
 
-    ActivityLog.objects.create(
-        user=request.user,
-        activity_type=ActivityLog.ActivityType.CHALLENGE_COMPLETED,
-        message="Caso de atendimento respondido",
-        details={
-            "challenge_id": challenge_id,
-            "score": score,
-            "content_score": content_score,
-            "clarity_score": clarity_score,
-        },
-    )
-    _mark_module_completed(request.user, ChallengeType.ATENDIMENTO, module_id)
+    ac, newly_completed = _mark_module_completed(request.user, ChallengeType.ATENDIMENTO, module_id)
+    if newly_completed:
+        ActivityLog.objects.create(
+            user=request.user,
+            activity_type=ActivityLog.ActivityType.CHALLENGE_COMPLETED,
+            message="Caso de atendimento respondido",
+            details={
+                "challenge_id": challenge_id,
+                "score": score,
+                "content_score": content_score,
+                "clarity_score": clarity_score,
+                "module_id": ac.module_id if ac else None,
+            },
+        )
 
     profile = _ensure_profile(request.user)
     duration = 0  # não temos início, então tratamos como resposta imediata (time_factor=1)
@@ -1743,17 +1750,19 @@ def find_errors_submit(request, attempt_id: int):
     attempt.save(update_fields=["found_errors", "completed", "updated_at"])
 
     if attempt.completed:
-        ActivityLog.objects.create(
-            user=request.user,
-            activity_type=ActivityLog.ActivityType.CHALLENGE_COMPLETED,
-            message="Desafio de 7 erros concluído",
-            details={
-                "recipe_type": attempt.recipe_type,
-                "found_errors": attempt.found_errors,
-                "expected_errors": attempt.expected_errors,
-            },
-        )
-        _mark_module_completed(request.user, ChallengeType.FIND_ERRORS, module_id)
+        ac, newly_completed = _mark_module_completed(request.user, ChallengeType.FIND_ERRORS, module_id)
+        if newly_completed:
+            ActivityLog.objects.create(
+                user=request.user,
+                activity_type=ActivityLog.ActivityType.CHALLENGE_COMPLETED,
+                message="Desafio de 7 erros concluído",
+                details={
+                    "recipe_type": attempt.recipe_type,
+                    "found_errors": attempt.found_errors,
+                    "expected_errors": attempt.expected_errors,
+                    "module_id": ac.module_id if ac else None,
+                },
+            )
         duration = (timezone.now() - attempt.created_at).total_seconds()
         profile = _ensure_profile(request.user)
         xp_gain = _xp_from_components(

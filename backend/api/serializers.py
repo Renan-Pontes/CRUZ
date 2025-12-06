@@ -163,7 +163,7 @@ class ActivityLogSerializer(serializers.ModelSerializer):
 
 
 class SeparacaoAnswerSerializer(serializers.Serializer):
-    medication_id = serializers.IntegerField()
+    medication_id = serializers.IntegerField(required=False, allow_null=True)
     chosen_category = serializers.CharField(max_length=2)
     module_id = serializers.IntegerField(required=False, allow_null=True)
 

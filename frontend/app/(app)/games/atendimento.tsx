@@ -73,6 +73,8 @@ export default function AtendimentoScreen() {
       Alert.alert("Resposta enviada", `Score: ${res.score}\nFeedback: ${res.feedback}`, [
         { text: "Voltar para trilha", onPress: () => router.replace("/(app)/trail") },
       ]);
+      // fallback auto-retorno
+      setTimeout(() => router.replace("/(app)/trail"), 1000);
     } catch (e) {
       console.log("Erro ao enviar atendimento", e);
       const message = e instanceof Error ? e.message : "Não foi possível enviar sua resposta.";

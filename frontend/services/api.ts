@@ -151,11 +151,13 @@ export interface SeparacaoAnswerRequest {
 export interface SeparacaoStepResult {
   correct: boolean;
   correct_category: string;
-  next_index: number;
+  next_index?: number;
+  index?: number;
   completed: boolean;
   accuracy?: number;
   xp_earned?: number;
   final_score?: number;
+  pending?: number;
 }
 
 // Challenges - Atendimento
@@ -494,12 +496,17 @@ export const apiService = {
     token: string,
     attemptId: number,
     category: string,
-    moduleId?: number
+    moduleId?: number,
+    medicationId?: number
   ): Promise<SeparacaoStepResult> {
     const response = await fetchWithTimeout(`${API_URL}/api/challenges/separacao/attempt/${attemptId}/answer/`, {
       method: "POST",
       headers: authHeaders(token),
-      body: JSON.stringify({ category, module_id: moduleId }),
+      body: JSON.stringify({
+        chosen_category: category,
+        module_id: moduleId,
+        medication_id: medicationId,
+      }),
     });
     return handleResponse<SeparacaoStepResult>(response);
   },
