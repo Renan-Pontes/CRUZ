@@ -96,32 +96,10 @@ export default function SignUp() {
     setIsLoading(true);
 
     try {
-      // Call the register API
-      const response = await apiService.register({
-        email: email.trim(),
-        password,
-        username: username.trim() || undefined,
-      });
-
-      // Store the token using the session context
-      // You might want to update the useSession hook to handle token storage
-      console.log("Registration successful:", response);
-
-      // Show success message
-      Alert.alert(
-        "Cadastro Realizado!",
-        "Sua conta foi criada com sucesso.",
-        [
-          {
-            text: "OK",
-            onPress: () => {
-              // Sign in the user automatically with the token
-              signIn(response.token);
-              router.replace("/trail");
-            },
-          },
-        ]
-      );
+      const response = await apiService.register(email.trim(), password, confirmPassword);
+      // Login automático assim que concluir
+      signIn(response.token);
+      router.replace("/trail");
     } catch (error) {
       console.error("Registration error:", error);
       Alert.alert(

@@ -8,15 +8,18 @@ import {
   TouchableOpacity,
   Text,
   Modal,
-  Easing,
   Alert,
+  RefreshControl,
 } from "react-native";
 import { router } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
 import { TrailPath } from "../../components/trail/TrailPath";
 import { TrailPointer } from "../../components/trail/TrailPointer";
 import { ProgressBar } from "../../components/trail/ProgressBar";
 import { useSession } from "@/auth/ctx";
 import { apiService } from "@/services/api";
+import { useStorageState } from "../useStorageState";
+import { useMemo } from "react";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -35,6 +38,7 @@ interface TrailNodeData {
   isCompleted: boolean;
   isLocked: boolean;
   moduleId?: number;
+  title?: string;
 }
 
 // Ícones
@@ -143,10 +147,13 @@ export default function Trail() {
   const [nodes, setNodes] = useState<TrailNodeData[]>([]);
   const [currentNodeIndex, setCurrentNodeIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   
   // Modal state
   const [showModal, setShowModal] = useState(false);
   const [selectedNode, setSelectedNode] = useState<TrailNodeData | null>(null);
+  const [[loadingLocalCompleted, localCompletedRaw]] = useStorageState("localCompletionsCount");
   
   // User info state
   const [userInfo, setUserInfo] = useState({
@@ -209,109 +216,139 @@ export default function Trail() {
         isCompleted: index < completedCount,
         isLocked: index > completedCount, // Só o atual está desbloqueado
         moduleId: module.id,
+        title: (module as any).title,
       };
     });
   }, []);
 
-  // Carrega dados do backend
-  useEffect(() => {
-    const loadData = async () => {
+  const loadData = useCallback(async (isPullRefresh = false) => {
+    setLoadError(null);
+    if (isPullRefresh) {
+      setIsRefreshing(true);
+    } else {
       setIsLoading(true);
-      
-      try {
-        if (session) {
-          // 1. Carrega perfil do usuário (XP, level, etc) via /api/auth/me/
-          try {
-            const meResponse = await apiService.getMe(session);
-            setUserInfo({
-              email: meResponse.email || "",
-              xp: meResponse.profile?.experience_points || 0,
-              level: meResponse.profile?.level || 1,
-              streak: meResponse.profile?.streak || 0,
-            });
-          } catch (e) {
-            console.log("Erro ao carregar perfil:", e);
-          }
-          
-          // 2. Carrega learning path
-          try {
-            const pathResponse = await apiService.getLearningPath(session);
-            
-            if (pathResponse.modules && pathResponse.modules.length > 0) {
-              const sortedModules = [...pathResponse.modules].sort(
-                (a, b) => a.position - b.position
-              );
-              
-              // 3. Carrega atividades para determinar progresso
-              let completedCount = 0;
-              try {
-                const activities = await apiService.getActivity(session);
-                // Conta quantos desafios foram completados
-                const completedChallenges = activities.filter(
-                  (act: any) => act.activity_type === "challenge_completed"
-                );
-                completedCount = Math.min(completedChallenges.length, sortedModules.length);
-              } catch (e) {
-                console.log("Erro ao carregar atividades:", e);
-              }
-              
-              const generatedNodes = generateNodes(sortedModules, completedCount);
-              setNodes(generatedNodes);
-              setCurrentNodeIndex(completedCount);
-              
-              // Posiciona mascote no node atual
-              if (generatedNodes[completedCount]) {
-                const node = generatedNodes[completedCount];
-                animatedPosition.setValue({
-                  x: node.x - 30,
-                  y: node.y - 95,
-                });
-              }
-              
-              setIsLoading(false);
+    }
+    let loaded = false;
+    
+    try {
+      if (session) {
+        // 1. Carrega perfil do usuário (XP, level, etc) via /api/auth/me/
+        try {
+          const meResponse = await apiService.getMe(session);
+          setUserInfo({
+            email: meResponse.email || "",
+            xp: meResponse.profile?.experience_points || 0,
+            level: meResponse.profile?.level || 1,
+            streak: meResponse.profile?.streak || 0,
+          });
+          } catch (e: any) {
+            if (e?.status === 401 || e?.status === 403) {
+              // Será tratado pelo handler global em _layout
               return;
             }
-          } catch (e) {
-            console.log("Erro ao carregar trilha:", e);
+            console.log("Erro ao carregar perfil:", e);
           }
+        
+        // 2. Carrega learning path
+        try {
+          const pathResponse = await apiService.getLearningPath(session);
+          
+          const fallbackModules = [
+            { id: 1, title: "Primeiro desafio", challenge_type: "find_errors", position: 0, required_exercises: 1 },
+          ];
+
+          const modulesToUse =
+            pathResponse.modules && pathResponse.modules.length > 0
+              ? [...pathResponse.modules]
+              : fallbackModules;
+
+          const sortedModules = [...modulesToUse].sort(
+            (a, b) => a.position - b.position
+          );
+          
+          // 3. Carrega atividades para determinar progresso
+          let completedCount = 0;
+          try {
+            const activities = await apiService.getActivity(session);
+            // Conta quantos desafios foram completados
+            const completedChallenges = activities.filter(
+              (act: any) => act.activity_type === "challenge_completed"
+            );
+            const localCompleted = parseInt(localCompletedRaw || "0", 10) || 0;
+            const totalCompleted = completedChallenges.length + localCompleted;
+            completedCount = Math.min(totalCompleted, sortedModules.length);
+          } catch (e) {
+            console.log("Erro ao carregar atividades:", e);
+          }
+          
+          const generatedNodes = generateNodes(sortedModules, completedCount);
+          setNodes(generatedNodes);
+          const activeIndex = generatedNodes.length > 0 ? Math.min(completedCount, generatedNodes.length - 1) : 0;
+          setCurrentNodeIndex(activeIndex);
+          
+          // Posiciona mascote no node atual
+          if (generatedNodes[completedCount]) {
+            const node = generatedNodes[completedCount];
+            animatedPosition.setValue({
+              x: node.x - 30,
+              y: node.y - 95,
+            });
+          }
+          loaded = true;
+        } catch (e: any) {
+          if (e?.status === 401 || e?.status === 403) {
+            return;
+          }
+          console.log("Erro ao carregar trilha:", e);
         }
-      } catch (error) {
-        console.log("Erro geral:", error);
       }
+    } catch (error: any) {
+      if (error?.status === 401 || error?.status === 403) {
+        return;
+      }
+      console.log("Erro geral:", error);
+      setLoadError("Falha ao carregar trilha. Usando modo demo.");
+    }
 
-      // Fallback: dados demo
+    if (!loaded) {
       const demoModules = [
-        { id: 1, challenge_type: "find_errors", position: 0 },
-        { id: 2, challenge_type: "separacao", position: 1 },
-        { id: 3, challenge_type: "atendimento", position: 2 },
-        { id: 4, challenge_type: "find_errors", position: 3 },
-        { id: 5, challenge_type: "separacao", position: 4 },
+        { id: 1, title: "Receitas Tipo A", challenge_type: "find_errors", position: 0 },
+        { id: 2, title: "Separação Básica", challenge_type: "separacao", position: 1 },
+        { id: 3, title: "Atendimento", challenge_type: "atendimento", position: 2 },
+        { id: 4, title: "Receitas Tipo B", challenge_type: "find_errors", position: 3 },
+        { id: 5, title: "Separação II", challenge_type: "separacao", position: 4 },
       ];
-      
-      const demoNodes = generateNodes(demoModules, 0);
-      setNodes(demoNodes);
-      setCurrentNodeIndex(0);
-      
-      // Posiciona mascote
-      if (demoNodes[0]) {
-        animatedPosition.setValue({
-          x: demoNodes[0].x - 30,
-          y: demoNodes[0].y - 95,
-        });
-      }
-      
-      setUserInfo({
-        email: "estudante@cs.cruzeirodosul.edu.br",
-        xp: 0,
-        level: 1,
-        streak: 0,
+      const localCompleted = parseInt(localCompletedRaw || "0", 10) || 0;
+      const demoCompleted = Math.min(localCompleted, demoModules.length);
+      const demoNodes = generateNodes(demoModules, demoCompleted);
+      let usedPrev = false;
+      setNodes(prev => {
+        if (prev.length) {
+          usedPrev = true;
+          return prev;
+        }
+        return demoNodes;
       });
-      
-      setIsLoading(false);
-    };
+      if (!usedPrev) {
+        const activeIndex = demoNodes.length > 0 ? Math.min(demoCompleted, demoNodes.length - 1) : 0;
+        setCurrentNodeIndex(activeIndex);
+        if (demoNodes[activeIndex]) {
+          animatedPosition.setValue({
+            x: demoNodes[activeIndex].x - 30,
+            y: demoNodes[activeIndex].y - 95,
+          });
+        }
+      }
+    }
 
+    setIsLoading(false);
+    setIsRefreshing(false);
+  }, [session, generateNodes, animatedPosition]);
+
+  // Carrega dados do backend
+  useEffect(() => {
     loadData();
-  }, [session, generateNodes]);
+  }, [loadData, localCompletedRaw]);
 
   // Handler de clique no node
   const handleNodePress = (index: number) => {
@@ -328,9 +365,16 @@ export default function Trail() {
     setShowModal(false);
     
     if (selectedNode) {
-      // Navega para task com o tipo de desafio
+      const pathByType: Record<string, string> = {
+        find_errors: "/(app)/games/find-errors",
+        separacao: "/(app)/games/separacao",
+        atendimento: "/(app)/games/atendimento",
+      };
+
+      const targetPath = pathByType[selectedNode.challengeType] || "/(app)/task";
+
       router.push({
-        pathname: "/(app)/task",
+        pathname: targetPath,
         params: { 
           challengeType: selectedNode.challengeType,
           moduleId: selectedNode.moduleId?.toString(),
@@ -371,8 +415,14 @@ export default function Trail() {
     );
   };
 
-  const progress = nodes.length > 0 ? currentNodeIndex / Math.min(nodes.length, 10) : 0;
-  const contentHeight = nodes.length * VERTICAL_SPACING + 400;
+  const completedNodes = useMemo(
+    () => nodes.filter((n) => n.isCompleted).length,
+    [nodes]
+  );
+  const progress = nodes.length > 0 ? completedNodes / nodes.length : 0;
+  const maxY = nodes.reduce((acc, node) => Math.max(acc, node.y), 0);
+  const contentHeight = Math.max(SCREEN_HEIGHT + 200, maxY + NODE_SIZE + 200);
+  const activeNode = nodes[currentNodeIndex] || nodes[0];
 
   if (isLoading) {
     return (
@@ -384,11 +434,21 @@ export default function Trail() {
 
   return (
     <View style={styles.container}>
+      <LinearGradient
+        colors={["#3f5872", "#243241", "#1d2835"]}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+      />
       {/* Header com info do usuário */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Text style={styles.logoutText}>Sair</Text>
-        </TouchableOpacity>
+        <View style={styles.headerLeft}>
+          <TouchableOpacity style={styles.secondaryButton} onPress={() => router.push("/(app)/profile")}>
+            <Text style={styles.secondaryText}>Perfil</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+            <Text style={styles.logoutText}>Sair</Text>
+          </TouchableOpacity>
+        </View>
         
         <View style={styles.headerCenter}>
           <Text style={styles.headerEmail} numberOfLines={1}>
@@ -407,17 +467,74 @@ export default function Trail() {
         </View>
       </View>
       
+      {loadError && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{loadError}</Text>
+          <TouchableOpacity onPress={() => loadData(true)} style={styles.retryButton}>
+            <Text style={styles.retryText}>Tentar de novo</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Streak indicator */}
       {userInfo.streak > 0 && (
         <View style={styles.streakBanner}>
           <Text style={styles.streakText}>🔥 {userInfo.streak} dias seguidos!</Text>
         </View>
       )}
-      
+
+      {/* Hero / próximo desafio */}
+      <View style={styles.heroCard}>
+        <View style={styles.heroHeader}>
+          <Text style={styles.heroLabel}>Próximo desafio</Text>
+          <Text style={styles.heroSmall}>{activeNode?.title || CHALLENGE_NAMES[activeNode?.challengeType || "find_errors"]}</Text>
+        </View>
+        <View style={styles.heroRow}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeEmoji}>
+              {activeNode?.icon ? ICON_EMOJI[activeNode.icon] : "🎯"}
+            </Text>
+            <Text style={styles.heroBadgeText}>
+              {activeNode ? CHALLENGE_NAMES[activeNode.challengeType] : "Desafio"}
+            </Text>
+          </View>
+          <View style={styles.heroMiniStats}>
+            <Text style={styles.heroMiniLabel}>Progresso</Text>
+            <Text style={styles.heroMiniValue}>{Math.round(progress * 100)}%</Text>
+          </View>
+        </View>
+        <View style={styles.heroFooter}>
+          <View style={styles.legendRow}>
+            <LegendItem label="Docs" icon="📄" />
+            <LegendItem label="Atendimento" icon="🧠" />
+            <LegendItem label="Separação" icon="💊" />
+          </View>
+          <TouchableOpacity
+            style={styles.primaryCta}
+            onPress={() => activeNode && handleNodePress(currentNodeIndex)}
+            activeOpacity={0.9}
+          >
+            <Text style={styles.primaryCtaText}>Começar agora</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={{ minHeight: contentHeight }}
+        contentContainerStyle={{
+          minHeight: contentHeight,
+          paddingBottom: 240,
+          paddingTop: 40,
+        }}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => loadData(true)}
+            tintColor="#FFD166"
+            colors={["#FFD166"]}
+          />
+        }
       >
         {/* Path */}
         <TrailPath nodes={nodes} />
@@ -489,6 +606,15 @@ export default function Trail() {
   );
 }
 
+function LegendItem({ label, icon }: { label: string; icon: string }) {
+  return (
+    <View style={styles.legendItem}>
+      <Text style={styles.legendIcon}>{icon}</Text>
+      <Text style={styles.legendText}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -505,6 +631,29 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 16,
   },
+  errorBanner: {
+    backgroundColor: "rgba(255, 107, 107, 0.25)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  errorText: {
+    color: "#FFE8E8",
+    flex: 1,
+    marginRight: 12,
+  },
+  retryButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 8,
+  },
+  retryText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
   // Header styles
   header: {
     flexDirection: "row",
@@ -514,6 +663,22 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingBottom: 12,
     backgroundColor: "rgba(0,0,0,0.3)",
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  secondaryButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 8,
+  },
+  secondaryText: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "600",
   },
   logoutButton: {
     paddingHorizontal: 12,
@@ -578,6 +743,110 @@ const styles = StyleSheet.create({
     color: "#FFD166",
     fontSize: 14,
     fontWeight: "600",
+  },
+  // Hero
+  heroCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 8,
+    padding: 16,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  heroHeader: {
+    marginBottom: 10,
+  },
+  heroLabel: {
+    color: "rgba(255,255,255,0.7)",
+    fontSize: 12,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+  },
+  heroSmall: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 4,
+  },
+  heroRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  heroBadge: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  heroBadgeEmoji: {
+    fontSize: 24,
+  },
+  heroBadgeText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
+    flex: 1,
+  },
+  heroMiniStats: {
+    width: 90,
+    padding: 10,
+    backgroundColor: "rgba(135, 219, 186, 0.2)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(135, 219, 186, 0.5)",
+  },
+  heroMiniLabel: {
+    color: "#c7f4e4",
+    fontSize: 12,
+  },
+  heroMiniValue: {
+    color: "#1a3a2f",
+    fontWeight: "800",
+    fontSize: 18,
+  },
+  heroFooter: {
+    marginTop: 14,
+    gap: 10,
+  },
+  legendRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  legendIcon: {
+    fontSize: 16,
+  },
+  legendText: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  primaryCta: {
+    marginTop: 4,
+    backgroundColor: "#87dbba",
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  primaryCtaText: {
+    color: "#1a3a2f",
+    fontWeight: "800",
+    fontSize: 16,
   },
   // Mascot container
   mascotContainer: {

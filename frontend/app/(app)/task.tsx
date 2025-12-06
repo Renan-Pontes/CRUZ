@@ -1,62 +1,201 @@
-import React from "react";
-import { View, StyleSheet, ScrollView, TouchableOpacity, ImageBackground, Image, Platform } from "react-native";
-import { router, useFocusEffect } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
+import React, { useEffect, useMemo, useState } from "react";
+import { View, StyleSheet, ScrollView, TouchableOpacity, ImageBackground, Image, Platform, Text, Alert } from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
 import { ThemedText } from "../../components/themed-text";
 import { IconSymbol } from "../../components/ui/icon-symbol";
-import * as ScreenOrientation from 'expo-screen-orientation';
+import * as ScreenOrientation from "expo-screen-orientation";
 import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
+import { useStorageState } from "../useStorageState";
+import { useSession } from "@/auth/ctx";
+import { apiService, API_BASE_URL } from "@/services/api";
 
 // Mock configuration to switch between tasks
 const CURRENT_TASK_MOCK: 'A' | 'B' | 'C' = 'A';
 
 export default function TaskScreen() {
+  const { session } = useSession();
   const [menuVisible, setMenuVisible] = React.useState(false);
   const [selectedOptions, setSelectedOptions] = React.useState<string[]>([]);
+  const [isLandscape, setIsLandscape] = React.useState(false);
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [[loadingSeen, rotateSeen], setRotateSeen] = useStorageState("rotateOverlaySeen");
+  const [[loadingLocalCompleted, localCompletedRaw], setLocalCompleted] = useStorageState("localCompletionsCount");
+  const params = useLocalSearchParams<{ challengeType?: string; moduleId?: string; recipeType?: string }>();
+  const challengeTypeParam = (params.challengeType as string) || "find_errors";
+  const recipeTypeParam = (params.recipeType as string) || "";
+  const recipeType = (["A", "B", "C"].includes(recipeTypeParam) 
+    ? (recipeTypeParam as "A" | "B" | "C") 
+    : challengeTypeParam === "find_errors" 
+      ? CURRENT_TASK_MOCK 
+      : null);
+  const showRotateOverlay = !!recipeType && (recipeType === "A" || recipeType === "B") && !isLandscape && !rotateSeen;
+  const [isLoading, setIsLoading] = useState(true);
+  const [findData, setFindData] = useState<any>(null);
+  const [separacaoData, setSeparacaoData] = useState<any>(null);
+  const [atendimentoData, setAtendimentoData] = useState<any>(null);
 
-  if (Platform.OS !== "web") {
-  useFocusEffect(
-    React.useCallback(() => {
-      // 👉 Quando a tela é carregada / exibida
-      if (CURRENT_TASK_MOCK === 'C') {
-        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
-      } else {
-        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-      }
+  React.useEffect(() => {
+    if (Platform.OS === "web") return;
 
-      // 👉 Quando a tela é desmontada / sair
-      return () => {
-        ScreenOrientation.lockAsync(
-          ScreenOrientation.OrientationLock.PORTRAIT
-        );
-      };
-    }, [])
-  );
-}
-  const backgroundImage = CURRENT_TASK_MOCK === 'C' 
+    const setup = async () => {
+      const current = await ScreenOrientation.getOrientationAsync();
+      const landscapeNow = current === ScreenOrientation.Orientation.LANDSCAPE_LEFT || current === ScreenOrientation.Orientation.LANDSCAPE_RIGHT;
+      setIsLandscape(landscapeNow);
+
+      if (recipeType === "C") {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
+      } else if (recipeType === "A" || recipeType === "B") {
+        await ScreenOrientation.unlockAsync(); // permite o usuário girar
+      } 
+    };
+
+    setup();
+
+    const sub = ScreenOrientation.addOrientationChangeListener((event) => {
+      const next = event.orientationInfo.orientation;
+      const isLand = next === ScreenOrientation.Orientation.LANDSCAPE_LEFT || next === ScreenOrientation.Orientation.LANDSCAPE_RIGHT;
+      setIsLandscape(isLand);
+    });
+
+    return () => {
+      ScreenOrientation.removeOrientationChangeListener(sub);
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
+    };
+  }, [recipeType]);
+
+  const backgroundImage = (recipeType || findData?.recipe_type) === "C"
     ? require("../../assets/images/background-em-pe.png")
     : require("../../assets/images/backgroud-task.png");
 
-  const recipeImage = {
-    'A': require('../../assets/images/receitaA.png'),
-    'B': require('../../assets/images/receitaB.png'),
-    'C': require('../../assets/images/receitaC.png'),
-  }[CURRENT_TASK_MOCK];
+  const recipeImage = useMemo(() => {
+    if (findData?.image_url) {
+      return { uri: findData.image_url };
+    }
+    const type = (recipeType || CURRENT_TASK_MOCK) as "A" | "B" | "C";
+    return {
+      'A': require('../../assets/images/receitaA.png'),
+      'B': require('../../assets/images/receitaB.png'),
+      'C': require('../../assets/images/receitaC.png'),
+    }[type];
+  }, [findData, recipeType]);
 
 
-  const options = [
-    { id: '1', label: 'Carimbo do fornecedor', correct: true },
-    { id: '2', label: 'Quantidade forma farmacêutica', correct: false },
-    { id: '3', label: 'Posologia', correct: true },
-    { id: '4', label: 'Indentificação de Emitente', correct: true },
-    { id: '5', label: 'Identificação do fornecedor', correct: true },
-  ];
+  const options = useMemo(() => {
+    if (challengeTypeParam === "find_errors" && findData?.options) {
+      return findData.options.map((opt: string, idx: number) => ({
+        id: String(idx + 1),
+        label: opt,
+        correct: true,
+      }));
+    }
+    // fallback menu options
+    return [
+      { id: "1", label: "Carimbo do fornecedor", correct: true },
+      { id: "2", label: "Quantidade forma farmacêutica", correct: false },
+      { id: "3", label: "Posologia", correct: true },
+      { id: "4", label: "Indentificação de Emitente", correct: true },
+      { id: "5", label: "Identificação do fornecedor", correct: true },
+    ];
+  }, [challengeTypeParam, findData]);
 
   const handleOptionPress = (id: string) => {
     if (selectedOptions.includes(id)) {
       setSelectedOptions(selectedOptions.filter(item => item !== id));
     } else {
       setSelectedOptions([...selectedOptions, id]);
+    }
+  };
+
+  useEffect(() => {
+    const loadData = async () => {
+      if (!session) {
+        setIsLoading(false);
+        return;
+      }
+      try {
+        if (challengeTypeParam === "atendimento") {
+          const data = await apiService.getAtendimento(session);
+          setAtendimentoData(data);
+        } else if (challengeTypeParam === "separacao") {
+          const data = await apiService.startSeparacao(session, false);
+          setSeparacaoData(data);
+        } else {
+          const data = await apiService.startFindErrors(session, false);
+          setFindData(data);
+        }
+      } catch (e) {
+        console.log("Erro ao carregar exercício:", e);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadData();
+  }, [challengeTypeParam, session]);
+
+  const handleSubmit = async () => {
+    if (isSubmitting) return;
+    if (!session) {
+      Alert.alert("Sessão inválida", "Faça login novamente.");
+      router.replace("/sign-in");
+      return;
+    }
+    setIsSubmitting(true);
+    let score = 0;
+
+    try {
+      if (challengeTypeParam === "atendimento" && atendimentoData?.challenge_id) {
+        const response = await apiService.submitAtendimento(
+          session,
+          atendimentoData.challenge_id,
+          "Resposta enviada pelo app"
+        );
+        score = response.score || 0;
+      } else if (challengeTypeParam === "separacao") {
+        // Garante um attempt
+        const attempt = separacaoData || (await apiService.startSeparacao(session, false));
+        const med = attempt?.medications?.[attempt.current_index || 0];
+        if (med) {
+          const result = await apiService.submitSeparacaoAnswer(
+            session,
+            attempt.attempt_id,
+            med.category
+          );
+          score = result.final_score || result.xp_earned || 0;
+        }
+      } else {
+        // find_errors: envia primeiro item selecionado ou o primeiro disponível
+        const attempt = findData?.attempt_id
+          ? findData
+          : await apiService.startFindErrors(session, false);
+        const errorToSend =
+          (selectedOptions[0] && options.find(o => o.id === selectedOptions[0])?.label) ||
+          attempt?.options?.[0];
+        if (attempt?.attempt_id && errorToSend) {
+          await fetch(`${API_BASE_URL}/api/challenges/find-errors/attempt/${attempt.attempt_id}/submit/`, {
+            method: "POST",
+            headers: {
+              Authorization: `Session ${session}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ found_error: errorToSend }),
+          }).catch(() => {});
+          score = 10;
+        }
+      }
+
+      const currentCount = parseInt(localCompletedRaw || "0", 10) || 0;
+      const nextCount = currentCount + 1;
+      setLocalCompleted(String(nextCount));
+
+      router.replace({
+        pathname: "/(app)/trail",
+        params: { lastScore: String(score) },
+      });
+    } catch (e) {
+      console.log("Erro ao enviar exercício:", e);
+      Alert.alert("Erro", "Não foi possível enviar o exercício. Tente novamente.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -131,7 +270,44 @@ export default function TaskScreen() {
               </View>
             </View>
           )}
+          
+          {/* Overlay para rotação obrigatória */}
+          {showRotateOverlay && (
+            <View style={styles.rotateOverlay}>
+              <View style={styles.rotateCard}>
+                <Text style={styles.rotateIcon}>↻</Text>
+                <Text style={styles.rotateTitle}>Vire o aparelho</Text>
+                <Text style={styles.rotateSub}>Receitas A e B são melhores em paisagem</Text>
+                <TouchableOpacity
+                  style={styles.rotateCta}
+                  onPress={() => setRotateSeen("1")}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.rotateCtaText}>Okay</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </ImageBackground>
+        {/* Submit bar */}
+        <View style={styles.submitBar}>
+          <View>
+            <Text style={styles.submitLabel}>Pronto para enviar?</Text>
+            <Text style={styles.submitSub}>
+              {challengeTypeParam === "atendimento"
+                ? "Enviar a resposta escrita para correção."
+                : "Confirme suas seleções e finalize o desafio."}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            activeOpacity={0.85}
+            disabled={isSubmitting}
+          >
+            <Text style={styles.submitButtonText}>{isSubmitting ? "Enviando..." : "Enviar"}</Text>
+          </TouchableOpacity>
+        </View>
       </SafeAreaView>
     </SafeAreaProvider>
   );
@@ -243,5 +419,89 @@ const styles = StyleSheet.create({
   },
   textIncorrect: {
     color: '#C62828',
+  },
+  rotateOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+    zIndex: 3000,
+  },
+  rotateCard: {
+    backgroundColor: "rgba(36, 50, 65, 0.9)",
+    borderRadius: 16,
+    padding: 20,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(135, 219, 186, 0.4)",
+  },
+  rotateIcon: {
+    fontSize: 42,
+    color: "#87dbba",
+    marginBottom: 8,
+  },
+  rotateTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  rotateSub: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 14,
+    textAlign: "center",
+    marginBottom: 10,
+  },
+  rotateCta: {
+    marginTop: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    backgroundColor: "#87dbba",
+    borderRadius: 10,
+  },
+  rotateCtaText: {
+    color: "#1a3a2f",
+    fontWeight: "800",
+    fontSize: 14,
+  },
+  submitBar: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    zIndex: 4000,
+    elevation: 12,
+  },
+  submitLabel: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  submitSub: {
+    color: "rgba(255,255,255,0.8)",
+    fontSize: 12,
+    marginTop: 2,
+  },
+  submitButton: {
+    backgroundColor: "#87dbba",
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  submitButtonDisabled: {
+    opacity: 0.7,
+  },
+  submitButtonText: {
+    color: "#1a3a2f",
+    fontWeight: "800",
+    fontSize: 14,
   },
 });

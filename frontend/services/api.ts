@@ -15,6 +15,7 @@ const API_HOST =
   process.env.EXPO_PUBLIC_API_URL ||
   DEFAULT_API_HOST;
 const API_URL = API_HOST.replace(/\/$/, "");
+export const API_BASE_URL = API_URL;
 
 const REQUEST_TIMEOUT_MS = 10000;
 
@@ -190,6 +191,24 @@ export interface LeaderboardEntry {
 // HELPER FUNCTIONS
 // ============================================
 
+export class ApiError extends Error {
+  status?: number;
+  details?: any;
+
+  constructor(message: string, status?: number, details?: any) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.details = details;
+  }
+}
+
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  unauthorizedHandler = handler;
+}
+
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
@@ -213,7 +232,14 @@ async function fetchWithTimeout(
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || errorData.message || `Erro ${response.status}`);
+    const message = errorData.detail || errorData.message || `Erro ${response.status}`;
+    if (response.status === 401 || response.status === 403) {
+      if (unauthorizedHandler) {
+        unauthorizedHandler();
+      }
+      throw new ApiError("Sessão inválida ou expirada.", response.status, errorData);
+    }
+    throw new ApiError(message, response.status, errorData);
   }
   return response.json();
 }
@@ -352,10 +378,13 @@ export const apiService = {
    * Iniciar novo exercício de encontrar erros
    * GET /api/challenges/find-errors/start/
    */
-  async startFindErrors(token: string, reset: boolean = false): Promise<FindErrorsExercise> {
-    const url = `${API_URL}/api/challenges/find-errors/start/${reset ? "?reset=true" : ""}`;
-    const response = await fetchWithTimeout(url, {
-      method: "GET",
+  async startFindErrors(token: string, reset: boolean = false, recipeType?: "A" | "B" | "C"): Promise<FindErrorsExercise> {
+    const query: string[] = [];
+    if (reset) query.push("reset=true");
+    if (recipeType) query.push(`recipe_type=${recipeType}`);
+    const suffix = query.length ? `?${query.join("&")}` : "";
+    const response = await fetchWithTimeout(`${API_URL}/api/challenges/find-errors/start/${suffix}`, {
+      method: "POST",
       headers: authHeaders(token),
     });
     return handleResponse<FindErrorsExercise>(response);
