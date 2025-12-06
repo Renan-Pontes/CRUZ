@@ -274,3 +274,44 @@ class AuthSession(TimeStampedModel):
 
     def is_active(self):
         return not self.revoked and self.expires_at > timezone.now()
+
+
+class SeparacaoAttempt(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="separacao_attempts",
+    )
+    medications = models.JSONField(default=list)
+    answers = models.JSONField(default=list)
+    current_index = models.PositiveIntegerField(default=0)
+    correct_count = models.PositiveIntegerField(default=0)
+    completed = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def total(self):
+        return len(self.medications or [])
+
+
+class FindErrorsAttempt(TimeStampedModel):
+    class RecipeType(models.TextChoices):
+        A = "A", "Tipo A"
+        B = "B", "Tipo B"
+        C = "C", "Tipo C"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="find_errors_attempts",
+    )
+    recipe_type = models.CharField(max_length=1, choices=RecipeType.choices)
+    error_type = models.CharField(max_length=100)
+    image_path = models.CharField(max_length=255)
+    expected_errors = models.JSONField(default=list)
+    found_errors = models.JSONField(default=list)
+    completed = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at"]

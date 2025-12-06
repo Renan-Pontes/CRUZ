@@ -158,3 +158,11 @@ _cors_origins_env = os.environ.get(
     'http://localhost:8081,http://127.0.0.1:8081',
 )
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in _cors_origins_env.split(',') if origin.strip()]
+
+# Endpoint para avaliação com LLM (ex.: Ollama em localhost:11434). Se falhar, cai no heurístico.
+ATENDIMENTO_LLM_ENDPOINT = os.environ.get('ATENDIMENTO_LLM_ENDPOINT', 'http://127.0.0.1:11434/api/generate').strip()
+ATENDIMENTO_LLM_API_KEY = os.environ.get('ATENDIMENTO_LLM_API_KEY', '').strip()
+ATENDIMENTO_LLM_MODEL = os.environ.get('ATENDIMENTO_LLM_MODEL', 'llama3.1').strip()
+
+# Raiz onde ficam as imagens do minigame de "7 erros" (tipo A/B/C e subpastas por erro).
+FIND_ERRORS_IMAGE_ROOT = os.environ.get('FIND_ERRORS_IMAGE_ROOT', str(BASE_DIR / 'imagens'))
