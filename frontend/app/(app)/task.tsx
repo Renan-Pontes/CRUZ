@@ -85,7 +85,8 @@ export default function TaskScreen() {
       return findData.options.map((opt: string, idx: number) => ({
         id: String(idx + 1),
         label: opt,
-        correct: true,
+        // Sem informação de correção vinda do backend: marcar como desconhecido/incorrect para feedback visual
+        correct: false,
       }));
     }
     // fallback menu options

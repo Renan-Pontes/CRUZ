@@ -21,6 +21,31 @@ import { apiService } from "@/services/api";
 import { useStorageState } from "../useStorageState";
 import { useMemo } from "react";
 
+function balanceModules(mods: Array<{ id: number; challenge_type: string; position: number; title?: string }>) {
+  const buckets: Record<string, any[]> = {};
+  mods.forEach((m) => {
+    buckets[m.challenge_type] = buckets[m.challenge_type] || [];
+    buckets[m.challenge_type].push(m);
+  });
+  Object.values(buckets).forEach((arr: any) => arr.sort((a: any, b: any) => a.position - b.position));
+
+  const order: any[] = [];
+  const types = Object.keys(buckets);
+  if (types.length === 0) return mods;
+
+  let added = true;
+  while (added) {
+    added = false;
+    for (const t of types) {
+      if (buckets[t].length) {
+        order.push(buckets[t].shift());
+        added = true;
+      }
+    }
+  }
+  return order;
+}
+
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 // Configurações
@@ -257,14 +282,13 @@ export default function Trail() {
             { id: 1, title: "Primeiro desafio", challenge_type: "find_errors", position: 0, required_exercises: 1 },
           ];
 
-          const modulesToUse =
+          const modulesToUseRaw =
             pathResponse.modules && pathResponse.modules.length > 0
               ? [...pathResponse.modules]
               : fallbackModules;
 
-          const sortedModules = [...modulesToUse].sort(
-            (a, b) => a.position - b.position
-          );
+          const balanced = balanceModules(modulesToUseRaw);
+          const sortedModules = balanced.map((m, idx) => ({ ...m, position: idx }));
           
           // 3. Carrega atividades para determinar progresso
           let completedCount = 0;
