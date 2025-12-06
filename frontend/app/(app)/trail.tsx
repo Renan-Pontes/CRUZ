@@ -20,6 +20,7 @@ import { useSession } from "@/auth/ctx";
 import { apiService } from "@/services/api";
 import { useStorageState } from "../useStorageState";
 import { useMemo } from "react";
+import { Modal as RNModal } from "react-native";
 
 function balanceModules(mods: Array<{ id: number; challenge_type: string; position: number; title?: string }>) {
   const buckets: Record<string, any[]> = {};
@@ -29,16 +30,26 @@ function balanceModules(mods: Array<{ id: number; challenge_type: string; positi
   });
   Object.values(buckets).forEach((arr: any) => arr.sort((a: any, b: any) => a.position - b.position));
 
+  const targetOrder = ["find_errors", "atendimento", "separacao"];
   const order: any[] = [];
-  const types = Object.keys(buckets);
-  if (types.length === 0) return mods;
-
   let added = true;
   while (added) {
     added = false;
-    for (const t of types) {
-      if (buckets[t].length) {
+    for (const t of targetOrder) {
+      if (buckets[t] && buckets[t].length) {
         order.push(buckets[t].shift());
+        added = true;
+      }
+    }
+    // Se ainda sobrar algo em outros tipos, consome no final
+    if (!added) {
+      const remainingTypes = Object.keys(buckets).filter((t) => buckets[t]?.length);
+      if (remainingTypes.length) {
+        remainingTypes.forEach((t) => {
+          while (buckets[t].length) {
+            order.push(buckets[t].shift());
+          }
+        });
         added = true;
       }
     }
@@ -178,7 +189,9 @@ export default function Trail() {
   // Modal state
   const [showModal, setShowModal] = useState(false);
   const [selectedNode, setSelectedNode] = useState<TrailNodeData | null>(null);
-  const [[loadingLocalCompleted, localCompletedRaw]] = useStorageState("localCompletionsCount");
+  const [[loadingLocalCompleted, localCompletedRaw], setLocalCompleted] = useStorageState("localCompletionsCount");
+  const [[loadingWelcome, welcomeSeen], setWelcomeSeen] = useStorageState("welcomeShown");
+  const [showWelcome, setShowWelcome] = useState(false);
   
   // User info state
   const [userInfo, setUserInfo] = useState({
@@ -222,7 +235,7 @@ export default function Trail() {
     // We want the first node (index 0) to be at the bottom
     const totalHeight = expandedModules.length * VERTICAL_SPACING + 400; // Extra padding
 
-    return expandedModules.map((module, index) => {
+    const nodes = expandedModules.map((module, index) => {
       const pattern = index % 4;
       let x: number;
 
@@ -251,6 +264,14 @@ export default function Trail() {
         title: (module as any).title,
       };
     });
+
+    // Ajusta para garantir que o menor Y não fique negativo (mantém sempre em área visível)
+    const minY = Math.min(...nodes.map((n) => n.y));
+    if (minY < 150) {
+      const offset = 150 - minY;
+      return nodes.map((n) => ({ ...n, y: n.y + offset }));
+    }
+    return nodes;
   }, []);
 
   const loadData = useCallback(async (isPullRefresh = false) => {
@@ -314,12 +335,12 @@ export default function Trail() {
           
           const generatedNodes = generateNodes(sortedModules, completedCount);
           setNodes(generatedNodes);
-          const activeIndex = generatedNodes.length > 0 ? Math.min(completedCount, generatedNodes.length - 1) : 0;
-          setCurrentNodeIndex(activeIndex);
+          const activeIndexNodes = generatedNodes.length > 0 ? Math.min(completedCount, generatedNodes.length - 1) : 0;
+          setCurrentNodeIndex(activeIndexNodes);
           
           // Posiciona mascote no node atual
-          if (generatedNodes[completedCount]) {
-            const node = generatedNodes[completedCount];
+          if (generatedNodes[activeIndexNodes]) {
+            const node = generatedNodes[activeIndexNodes];
             animatedPosition.setValue({
               x: node.x - 30,
               y: node.y - 95,
@@ -374,7 +395,10 @@ export default function Trail() {
 
     setIsLoading(false);
     setIsRefreshing(false);
-  }, [session, generateNodes, animatedPosition]);
+    if (loaded && session) {
+      setLocalCompleted("0");
+    }
+  }, [session, generateNodes, animatedPosition, setLocalCompleted, localCompletedRaw]);
 
   // Auto-scroll to active node
   useEffect(() => {
@@ -398,6 +422,13 @@ export default function Trail() {
   useEffect(() => {
     loadData();
   }, [loadData, localCompletedRaw]);
+
+  useEffect(() => {
+    if (!loadingWelcome && !welcomeSeen) {
+      setShowWelcome(true);
+      setWelcomeSeen("1");
+    }
+  }, [loadingWelcome, welcomeSeen, setWelcomeSeen]);
 
   // Handler de clique no node
   const handleNodePress = (index: number) => {
@@ -618,6 +649,35 @@ export default function Trail() {
 
       {/* Progress bar */}
       <ProgressBar progress={Math.min(progress, 1)} />
+
+      {/* Welcome modal */}
+      <RNModal
+        visible={showWelcome}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowWelcome(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalEmoji}>👋</Text>
+            <Text style={styles.modalTitle}>Bem-vindo(a)!</Text>
+            <Text style={styles.modalSubtitle}>
+              Comece pelo primeiro ponto da trilha. Toque em "Começar agora" para iniciar seu desafio.
+            </Text>
+            <TouchableOpacity 
+              style={styles.modalButtonPrimary}
+              onPress={() => {
+                setShowWelcome(false);
+                if (nodes.length) {
+                  handleNodePress(currentNodeIndex);
+                }
+              }}
+            >
+              <Text style={styles.modalButtonPrimaryText}>Começar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </RNModal>
       
       {/* Modal de confirmação */}
       <Modal

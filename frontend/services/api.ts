@@ -153,6 +153,7 @@ export interface SeparacaoStepResult {
   correct_category: string;
   next_index: number;
   completed: boolean;
+  accuracy?: number;
   xp_earned?: number;
   final_score?: number;
 }
@@ -416,6 +417,19 @@ export const apiService = {
       method: "POST",
       headers: authHeaders(token),
       body: JSON.stringify({ x, y }),
+    });
+    return handleResponse<FindErrorsSubmitResponse>(response);
+  },
+
+  /**
+   * Submeter erro por texto (found_error)
+   * POST /api/challenges/find-errors/attempt/{attempt_id}/submit/
+   */
+  async submitFindErrorsError(token: string, attemptId: number, foundError: string): Promise<FindErrorsSubmitResponse> {
+    const response = await fetchWithTimeout(`${API_URL}/api/challenges/find-errors/attempt/${attemptId}/submit/`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ found_error: foundError }),
     });
     return handleResponse<FindErrorsSubmitResponse>(response);
   },

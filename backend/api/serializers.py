@@ -244,6 +244,8 @@ class AtendimentoExerciseSerializer(serializers.ModelSerializer):
 class AtendimentoSubmitSerializer(serializers.Serializer):
     challenge_id = serializers.IntegerField()
     response_text = serializers.CharField()
+    scenario = serializers.CharField(required=False, allow_blank=True)
+    context_type = serializers.CharField(required=False, allow_blank=True)
 
 
 class AtendimentoResultSerializer(serializers.Serializer):

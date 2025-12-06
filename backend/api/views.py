@@ -134,6 +134,8 @@ from .models import (
     AssignedChallenge,
     Badge,
     Challenge,
+    ChallengeType,
+    PathModule,
     LeaderboardEntry,
     LearningPath,
     Medication,
@@ -306,6 +308,104 @@ def _ensure_learning_path(user):
     return path
 
 
+def _ensure_default_medications():
+    if Medication.objects.exists():
+        return
+    meds = [
+        ("Amoxicilina", "A1"),
+        ("Ibuprofeno", "B1"),
+        ("Paracetamol", "C1"),
+        ("Dipirona", "C2"),
+        ("Azitromicina", "A2"),
+        ("Omeprazol", "B2"),
+    ]
+    Medication.objects.bulk_create([Medication(name=n, category=c) for n, c in meds])
+
+
+def _ensure_default_atendimento_case():
+    challenge = (
+        AtendimentoChallenge.objects.select_related("challenge")
+        .filter(challenge__is_active=True)
+        .first()
+    )
+    if challenge:
+        return challenge
+
+    base = Challenge.objects.create(
+        challenge_type=ChallengeType.ATENDIMENTO,
+        title="Caso genérico",
+        prompt="Paciente com sintomas leves, oriente de forma clara e segura.",
+        difficulty=1,
+        is_active=True,
+    )
+    return AtendimentoChallenge.objects.create(
+        challenge=base,
+        customer_scenario="Paciente pergunta sobre uso correto do medicamento prescrito.",
+        expected_response="Orientar posologia, cuidados e sinais de alerta.",
+    )
+
+
+def _ensure_modules_for_path(path: LearningPath, desired_count: int = 3):
+    """
+    Garante que a trilha tenha pelo menos desired_count módulos, gerando sequência
+    balanceada dos três tipos de desafio.
+    """
+    base_sequence = ["find_errors", "atendimento", "separacao"]
+    mods = list(path.modules.order_by("position"))
+    if len(mods) >= desired_count:
+        # Se já atingiu o desejado mas o último módulo foi concluído,
+        # adiciona mais um ciclo para manter a trilha crescendo
+        last_pos = mods[-1].position
+        next_pos = last_pos + 1
+        to_create = []
+        for i in range(len(base_sequence)):
+            ctype = base_sequence[(next_pos + i) % len(base_sequence)]
+            title_map = {
+                "find_errors": "Encontre os erros",
+                "atendimento": "Atendimento",
+                "separacao": "Separação",
+            }
+            to_create.append(
+                PathModule(
+                    path=path,
+                    title=f"{title_map.get(ctype, 'Módulo')} #{next_pos + i + 1}",
+                    challenge_type=ctype,
+                    position=next_pos + i,
+                    required_exercises=1,
+                )
+            )
+        PathModule.objects.bulk_create(to_create)
+        return list(path.modules.order_by("position"))
+
+    start_pos = mods[-1].position + 1 if mods else 0
+    next_index = start_pos % len(base_sequence)
+    to_create = []
+
+    while len(mods) + len(to_create) < desired_count:
+        ctype = base_sequence[next_index % len(base_sequence)]
+        pos = start_pos + len(to_create)
+        title_map = {
+            "find_errors": "Encontre os erros",
+            "atendimento": "Atendimento",
+            "separacao": "Separação",
+        }
+        to_create.append(
+            PathModule(
+                path=path,
+                title=f"{title_map.get(ctype, 'Módulo')} #{pos + 1}",
+                challenge_type=ctype,
+                position=pos,
+                required_exercises=1,
+            )
+        )
+        next_index += 1
+
+    if to_create:
+        PathModule.objects.bulk_create(to_create)
+
+    return list(path.modules.order_by("position"))
+
+
 def _sample_medications(count: int):
     meds = list(Medication.objects.values("id", "name", "category"))
     if not meds:
@@ -389,6 +489,7 @@ def _serialize_attempt(attempt: SeparacaoAttempt):
     total = len(meds)
     return SeparacaoAttemptSerializer(
         {
+            "attempt_id": attempt.id,
             "id": attempt.id,
             "medications": meds,
             "current_index": attempt.current_index,
@@ -475,9 +576,11 @@ _JARGON = {
 }
 
 
-def _evaluate_atendimento(user_text: str, expected: str) -> tuple[int, int, list[str]]:
+def _evaluate_atendimento(user_text: str, scenario: str, expected: str) -> tuple[int, int, list[str]]:
+    """Avalia localmente combinando contexto e resposta esperada."""
+    full_expected = f"{scenario} {expected}".strip()
     tokens_user = _clean_text(user_text)
-    tokens_expected = _clean_text(expected)
+    tokens_expected = _clean_text(full_expected)
 
     content_score = SequenceMatcher(None, " ".join(tokens_user), " ".join(tokens_expected)).ratio()
     content_score = max(0.0, min(content_score, 1.0))
@@ -502,7 +605,7 @@ def _evaluate_atendimento(user_text: str, expected: str) -> tuple[int, int, list
     return final_score, int(round(content_score * 100)), int(round(clarity_score * 100)), feedback
 
 
-def _call_llm_atendimento(user_text: str, expected: str):
+def _call_llm_atendimento(user_text: str, scenario: str, expected: str):
     if not ATENDIMENTO_LLM_ENDPOINT:
         return None
     payload = {
@@ -511,7 +614,9 @@ def _call_llm_atendimento(user_text: str, expected: str):
         "options": {"temperature": 0.4, "num_predict": 256},
         "prompt": (
             "Avalie a resposta de atendimento de um farmacêutico.\n"
-            "Contexto (situação do cliente):\n"
+            "Cenário completo do cliente (use TODO o texto como contexto):\n"
+            f"{scenario}\n\n"
+            "Política / resposta esperada:\n"
             f"{expected}\n\n"
             "Resposta do farmacêutico:\n"
             f"{user_text}\n\n"
@@ -901,6 +1006,15 @@ def learning_path_view(request):
         learning_path = request.user.learning_path
     except LearningPath.DoesNotExist:
         raise exceptions.NotFound("Trilha não encontrada para este usuário.")
+    # Garante módulos sempre adiantados: mínimo 3 e sempre +2 em relação aos concluídos,
+    # além de manter pelo menos +3 slots além do tamanho atual
+    completed = (
+        request.user.activity_logs.filter(activity_type=ActivityLog.ActivityType.CHALLENGE_COMPLETED).count()
+        + request.user.assigned_challenges.filter(status=AssignedChallenge.Status.COMPLETED).count()
+    )
+    current_len = learning_path.modules.count()
+    desired = max(3, completed + 3, current_len + 3)
+    _ensure_modules_for_path(learning_path, desired_count=desired)
     return Response(LearningPathSerializer(learning_path).data)
 
 
@@ -959,6 +1073,7 @@ def activity_logs(request):
 @permission_classes([permissions.IsAuthenticated])
 def separacao_exercises(request):
     ensure_secure_transport(request)
+    _ensure_default_medications()
     try:
         count = int(request.query_params.get("count", SEPARACAO_DEFAULT_COUNT))
     except ValueError:
@@ -1063,6 +1178,7 @@ def separacao_submit(request):
 @permission_classes([permissions.IsAuthenticated])
 def separacao_start(request):
     ensure_secure_transport(request)
+    _ensure_default_medications()
     reset = str(request.query_params.get("reset", "")).lower() in ("1", "true", "yes", "sim")
     active = (
         request.user.separacao_attempts.filter(completed=False)
@@ -1229,14 +1345,7 @@ def separacao_answer(request, attempt_id: int):
 @permission_classes([permissions.IsAuthenticated])
 def atendimento_exercise(request):
     ensure_secure_transport(request)
-    challenge = (
-        AtendimentoChallenge.objects.select_related("challenge")
-        .filter(challenge__is_active=True)
-        .order_by("?")
-        .first()
-    )
-    if not challenge:
-        raise exceptions.NotFound("Nenhum caso de atendimento cadastrado.")
+    challenge = _ensure_default_atendimento_case()
     base_context = _random_atendimento_context(challenge.customer_scenario)
     context_choice = random.choice(_ATENDIMENTO_CONTEXTS)
     scenario = f"{base_context} {context_choice['extra']}".strip()
@@ -1267,6 +1376,8 @@ def atendimento_submit(request):
 
     challenge_id = payload.validated_data["challenge_id"]
     response_text = payload.validated_data["response_text"]
+    scenario = payload.validated_data.get("scenario") or ""
+    context_type = payload.validated_data.get("context_type") or ""
 
     try:
         case = AtendimentoChallenge.objects.select_related("challenge").get(
@@ -1275,7 +1386,10 @@ def atendimento_submit(request):
     except AtendimentoChallenge.DoesNotExist:
         raise exceptions.NotFound("Caso de atendimento não encontrado ou inativo.")
 
-    llm_result = _call_llm_atendimento(response_text, case.expected_response)
+    full_scenario = scenario.strip() or case.customer_scenario
+    full_context = f"{full_scenario} ({context_type})" if context_type else full_scenario
+
+    llm_result = _call_llm_atendimento(response_text, full_context, case.expected_response)
     if llm_result:
         score = llm_result["score"]
         content_score = llm_result["content_score"]
@@ -1283,7 +1397,7 @@ def atendimento_submit(request):
         feedback = llm_result["feedback"]
     else:
         score, content_score, clarity_score, feedback = _evaluate_atendimento(
-            response_text, case.expected_response
+            response_text, full_context, case.expected_response
         )
 
     ActivityLog.objects.create(

@@ -18,8 +18,10 @@ export default function TaskScreen() {
   const [selectedOptions, setSelectedOptions] = React.useState<string[]>([]);
   const [isLandscape, setIsLandscape] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [attemptCompleted, setAttemptCompleted] = useState(false);
   const [[loadingSeen, rotateSeen], setRotateSeen] = useStorageState("rotateOverlaySeen");
   const [[loadingLocalCompleted, localCompletedRaw], setLocalCompleted] = useStorageState("localCompletionsCount");
+  const [optionStatus, setOptionStatus] = useState<Record<string, "correct" | "wrong">>({});
   const params = useLocalSearchParams<{ challengeType?: string; moduleId?: string; recipeType?: string }>();
   const challengeTypeParam = (params.challengeType as string) || "find_errors";
   const recipeTypeParam = (params.recipeType as string) || "";
@@ -85,7 +87,6 @@ export default function TaskScreen() {
       return findData.options.map((opt: string, idx: number) => ({
         id: String(idx + 1),
         label: opt,
-        // Sem informação de correção vinda do backend: marcar como desconhecido/incorrect para feedback visual
         correct: false,
       }));
     }
@@ -99,16 +100,61 @@ export default function TaskScreen() {
     ];
   }, [challengeTypeParam, findData]);
 
-  const handleOptionPress = (id: string) => {
-    if (selectedOptions.includes(id)) {
-      setSelectedOptions(selectedOptions.filter(item => item !== id));
-    } else {
-      setSelectedOptions([...selectedOptions, id]);
+  const handleOptionPress = async (id: string) => {
+    if (isSubmitting || attemptCompleted) return;
+    if (challengeTypeParam !== "find_errors") {
+      // toggle only
+      if (selectedOptions.includes(id)) {
+        setSelectedOptions(selectedOptions.filter(item => item !== id));
+      } else {
+        setSelectedOptions([...selectedOptions, id]);
+      }
+      return;
+    }
+
+    if (!session) {
+      Alert.alert("Sessão inválida", "Faça login novamente.");
+      router.replace("/sign-in");
+      return;
+    }
+
+    const option = options.find((o) => o.id === id);
+    if (!option || !findData?.attempt_id) return;
+
+    try {
+      setIsSubmitting(true);
+      const res = await apiService.submitFindErrorsError(session, findData.attempt_id, option.label);
+      setOptionStatus((prev) => ({
+        ...prev,
+        [id]: res.correct ? "correct" : "wrong",
+      }));
+
+      if (res.completed) {
+        // Apenas registra conclusão se for attempt atual (não replays)
+        const currentCount = parseInt(localCompletedRaw || "0", 10) || 0;
+        setLocalCompleted(String(currentCount + 1));
+        setAttemptCompleted(true);
+        Alert.alert(
+          res.correct ? "Exercício concluído" : "Exercício concluído",
+          `Erros encontrados: ${res.found_errors}/${res.total_errors}`,
+          [{ text: "OK", onPress: () => router.replace("/(app)/trail") }]
+        );
+      } else {
+        if (!res.correct) {
+          Alert.alert("Errou", "Esse item não é um erro. Tente novamente.");
+        }
+      }
+    } catch (e) {
+      console.log("Erro ao enviar erro:", e);
+      Alert.alert("Erro", "Não foi possível registrar o clique. Tente novamente.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   useEffect(() => {
     const loadData = async () => {
+      setAttemptCompleted(false);
       if (!session) {
         setIsLoading(false);
         return;
@@ -134,7 +180,7 @@ export default function TaskScreen() {
   }, [challengeTypeParam, session]);
 
   const handleSubmit = async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || attemptCompleted) return;
     if (!session) {
       Alert.alert("Sessão inválida", "Faça login novamente.");
       router.replace("/sign-in");
@@ -184,9 +230,11 @@ export default function TaskScreen() {
         }
       }
 
+      // Só incrementa progresso local se não for replay: considera attempt_id atual para evitar duplicar
       const currentCount = parseInt(localCompletedRaw || "0", 10) || 0;
       const nextCount = currentCount + 1;
       setLocalCompleted(String(nextCount));
+      setAttemptCompleted(true);
 
       router.replace({
         pathname: "/(app)/trail",
@@ -247,21 +295,23 @@ export default function TaskScreen() {
                       key={option.id} 
                       style={[
                         styles.menuItem, 
-                        isSelected && (option.correct ? styles.menuItemCorrect : styles.menuItemIncorrect)
+                        (optionStatus[option.id] === "correct" && styles.menuItemCorrect),
+                        (optionStatus[option.id] === "wrong" && styles.menuItemIncorrect)
                       ]}
                       onPress={() => handleOptionPress(option.id)}
                     >
-                      {isSelected && (
+                      {optionStatus[option.id] && (
                         <IconSymbol 
-                          name={option.correct ? "checkmark" : "xmark"} 
+                          name={optionStatus[option.id] === "correct" ? "checkmark" : "xmark"} 
                           size={20} 
-                          color={option.correct ? "#4CAF50" : "#F44336"} 
+                          color={optionStatus[option.id] === "correct" ? "#4CAF50" : "#F44336"} 
                           style={{ marginRight: 8 }}
                         />
                       )}
                       <ThemedText style={[
                         styles.menuText,
-                        isSelected && (option.correct ? styles.textCorrect : styles.textIncorrect)
+                        optionStatus[option.id] === "correct" && styles.textCorrect,
+                        optionStatus[option.id] === "wrong" && styles.textIncorrect,
                       ]}>
                         {option.label}
                       </ThemedText>
