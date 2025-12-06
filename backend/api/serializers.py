@@ -165,6 +165,7 @@ class ActivityLogSerializer(serializers.ModelSerializer):
 class SeparacaoAnswerSerializer(serializers.Serializer):
     medication_id = serializers.IntegerField()
     chosen_category = serializers.CharField(max_length=2)
+    module_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class SeparacaoSubmissionSerializer(serializers.Serializer):
@@ -246,6 +247,7 @@ class AtendimentoSubmitSerializer(serializers.Serializer):
     response_text = serializers.CharField()
     scenario = serializers.CharField(required=False, allow_blank=True)
     context_type = serializers.CharField(required=False, allow_blank=True)
+    module_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class AtendimentoResultSerializer(serializers.Serializer):
@@ -279,6 +281,7 @@ class FindErrorsAttemptSerializer(serializers.Serializer):
 
 class FindErrorsSubmitSerializer(serializers.Serializer):
     found_error = serializers.CharField()
+    module_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class FindErrorsResultSerializer(serializers.Serializer):

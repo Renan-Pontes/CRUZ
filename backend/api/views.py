@@ -345,6 +345,115 @@ def _ensure_default_atendimento_case():
     )
 
 
+def _ensure_level_badges():
+    """
+    Cria badges genéricas para marcos de nível (10 em 10 até 100).
+    """
+    levels = range(10, 101, 10)
+    for lvl in levels:
+        name = f"Nível {lvl}"
+        criteria = f"level>={lvl}"
+        badge, created = Badge.objects.get_or_create(
+            name=name,
+            defaults={
+                "description": f"Atingiu o nível {lvl}.",
+                "criteria": criteria,
+            },
+        )
+        # Se existir um ícone gerado, associa (badges/level_<lvl>.png).
+        icon_path = os.path.join("badges", f"level_{lvl}.png")
+        media_root = getattr(settings, "MEDIA_ROOT", "")
+        if media_root:
+            full_icon = os.path.join(media_root, icon_path)
+            if os.path.isfile(full_icon) and (not badge.icon or not badge.icon.name):
+                badge.icon.name = icon_path
+                badge.save(update_fields=["icon", "updated_at"])
+
+
+def _mark_module_completed(user, challenge_type: str, module_id: int | None = None):
+    """
+    Marca o módulo como concluído apenas uma vez por usuário, evitando liberar módulos
+    ao rejogar exercícios antigos. Usa AssignedChallenge para controlar progresso.
+    """
+    try:
+        path = user.learning_path
+    except LearningPath.DoesNotExist:
+        return None
+
+    modules_qs = path.modules.filter(challenge_type=challenge_type)
+    if module_id:
+        modules_qs = modules_qs.filter(id=module_id)
+    module = modules_qs.order_by("position").first()
+    if not module:
+        return None
+
+    # Reutiliza qualquer challenge ativo do tipo; se não existir, cria um genérico.
+    challenge = (
+        Challenge.objects.filter(challenge_type=challenge_type, is_active=True).order_by("id").first()
+    )
+    if not challenge:
+        challenge = Challenge.objects.create(
+            challenge_type=challenge_type,
+            title=f"Desafio {challenge_type}",
+            prompt="",
+            difficulty=1,
+            is_active=True,
+        )
+
+    ac, _ = AssignedChallenge.objects.get_or_create(
+        user=user, module=module, challenge=challenge
+    )
+    ac.attempt_count = ac.attempt_count + 1
+    now = timezone.now()
+    if not ac.started_at:
+        ac.started_at = now
+    ac.last_interaction_at = now
+    update_fields = ["attempt_count", "last_interaction_at"]
+    if not ac.completed_at:
+        ac.completed_at = now
+        update_fields.append("completed_at")
+    if ac.status != AssignedChallenge.Status.COMPLETED:
+        ac.status = AssignedChallenge.Status.COMPLETED
+        update_fields.append("status")
+    if ac.started_at == now:
+        update_fields.append("started_at")
+    ac.save(update_fields=update_fields)
+    return ac
+
+
+def _sync_leaderboard_entry(user):
+    """
+    Atualiza o score do usuário no leaderboard e recalcula posições globais.
+    """
+    profile = _ensure_profile(user)
+    old_positions = {
+        e.user_id: e.position for e in LeaderboardEntry.objects.select_related("user").all()
+    }
+    entry, _ = LeaderboardEntry.objects.get_or_create(
+        user=user,
+        defaults={
+            "position": LeaderboardEntry.objects.count() + 1,
+            "score": profile.experience_points,
+        },
+    )
+    entry.score = profile.experience_points
+    entry.save(update_fields=["score", "updated_at"])
+
+    entries = LeaderboardEntry.objects.select_related("user").order_by("-score", "user__date_joined")
+    for idx, item in enumerate(entries, start=1):
+        prev = old_positions.get(item.user_id, idx)
+        trend = LeaderboardEntry.Trend.STABLE
+        if prev > idx:
+            trend = LeaderboardEntry.Trend.UP
+        elif prev < idx:
+            trend = LeaderboardEntry.Trend.DOWN
+        if item.position != idx or item.trend != trend:
+            item.position = idx
+            item.trend = trend
+            item.save(update_fields=["position", "trend", "updated_at"])
+    return entry
+
+
 def _ensure_modules_for_path(path: LearningPath, desired_count: int = 3):
     """
     Garante que a trilha tenha pelo menos desired_count módulos, gerando sequência
@@ -466,6 +575,7 @@ def _badge_matches(badge: Badge, user, profile: Profile, completed_assignments: 
 
 
 def _award_badges(user):
+    _ensure_level_badges()
     profile = _ensure_profile(user)
     completed_assignments = user.assigned_challenges.filter(
         status=AssignedChallenge.Status.COMPLETED
@@ -506,11 +616,13 @@ def _add_xp(user, amount: int, reason: str = ""):
         return
     profile = _ensure_profile(user)
     profile.experience_points += amount
-    # Level progression: 100 XP per level as simples regra.
+    # Level progression: 100 XP per level como regra simples.
     new_level = max(1, profile.experience_points // 100 + 1)
     if new_level != profile.level:
         profile.level = new_level
     profile.save(update_fields=["experience_points", "level", "updated_at"])
+    _award_badges(user)
+    _sync_leaderboard_entry(user)
     if reason:
         ActivityLog.objects.create(
             user=user,
@@ -966,6 +1078,7 @@ def badges_list(request):
 @permission_classes([permissions.IsAuthenticated])
 def leaderboard_view(request):
     ensure_secure_transport(request)
+    _sync_leaderboard_entry(request.user)
     try:
         limit = int(request.query_params.get("limit", 20))
     except ValueError:
@@ -1009,11 +1122,13 @@ def learning_path_view(request):
     # Garante módulos sempre adiantados: mínimo 3 e sempre +2 em relação aos concluídos,
     # além de manter pelo menos +3 slots além do tamanho atual
     completed = (
-        request.user.activity_logs.filter(activity_type=ActivityLog.ActivityType.CHALLENGE_COMPLETED).count()
-        + request.user.assigned_challenges.filter(status=AssignedChallenge.Status.COMPLETED).count()
+        request.user.assigned_challenges.filter(status=AssignedChallenge.Status.COMPLETED)
+        .values("module_id")
+        .distinct()
+        .count()
     )
     current_len = learning_path.modules.count()
-    desired = max(3, completed + 3, current_len + 3)
+    desired = max(3, completed + 3, current_len)
     _ensure_modules_for_path(learning_path, desired_count=desired)
     return Response(LearningPathSerializer(learning_path).data)
 
@@ -1304,6 +1419,11 @@ def separacao_answer(request, attempt_id: int):
                 "accuracy": attempt.correct_count / total if total else 0,
             },
         )
+        _mark_module_completed(
+            request.user,
+            ChallengeType.SEPARACAO,
+            payload.validated_data.get("module_id"),
+        )
         duration = (timezone.now() - attempt.created_at).total_seconds()
         profile = _ensure_profile(request.user)
         xp_gain = _xp_from_components(
@@ -1378,6 +1498,7 @@ def atendimento_submit(request):
     response_text = payload.validated_data["response_text"]
     scenario = payload.validated_data.get("scenario") or ""
     context_type = payload.validated_data.get("context_type") or ""
+    module_id = payload.validated_data.get("module_id")
 
     try:
         case = AtendimentoChallenge.objects.select_related("challenge").get(
@@ -1411,6 +1532,7 @@ def atendimento_submit(request):
             "clarity_score": clarity_score,
         },
     )
+    _mark_module_completed(request.user, ChallengeType.ATENDIMENTO, module_id)
 
     profile = _ensure_profile(request.user)
     duration = 0  # não temos início, então tratamos como resposta imediata (time_factor=1)
@@ -1604,6 +1726,7 @@ def find_errors_submit(request, attempt_id: int):
     payload = FindErrorsSubmitSerializer(data=request.data)
     payload.is_valid(raise_exception=True)
     found_error = payload.validated_data["found_error"]
+    module_id = payload.validated_data.get("module_id")
 
     found = list(attempt.found_errors or [])
     if found_error not in found:
@@ -1630,6 +1753,7 @@ def find_errors_submit(request, attempt_id: int):
                 "expected_errors": attempt.expected_errors,
             },
         )
+        _mark_module_completed(request.user, ChallengeType.FIND_ERRORS, module_id)
         duration = (timezone.now() - attempt.created_at).total_seconds()
         profile = _ensure_profile(request.user)
         xp_gain = _xp_from_components(

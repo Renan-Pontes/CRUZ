@@ -54,7 +54,16 @@ export default function AtendimentoScreen() {
     setStatus("Enviando resposta...");
     setResult(null);
     try {
-      const res = await apiService.submitAtendimento(session, Number(data.challenge_id), answer.trim());
+      const res = await apiService.submitAtendimento(
+        session,
+        Number(data.challenge_id),
+        answer.trim(),
+        {
+          moduleId: moduleId ? Number(moduleId) : undefined,
+          scenario: data.customer_scenario,
+          contextType: data.context_type,
+        }
+      );
       const current = parseInt(localCompletedRaw || "0", 10) || 0;
       setLocalCompleted(String(current + 1));
       setStatus("Resposta enviada! Aguardando avaliação da IA...");

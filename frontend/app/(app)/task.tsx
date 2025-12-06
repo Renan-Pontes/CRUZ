@@ -24,6 +24,7 @@ export default function TaskScreen() {
   const [optionStatus, setOptionStatus] = useState<Record<string, "correct" | "wrong">>({});
   const params = useLocalSearchParams<{ challengeType?: string; moduleId?: string; recipeType?: string }>();
   const challengeTypeParam = (params.challengeType as string) || "find_errors";
+  const moduleIdParam = params.moduleId ? Number(params.moduleId) : undefined;
   const recipeTypeParam = (params.recipeType as string) || "";
   const recipeType = (["A", "B", "C"].includes(recipeTypeParam) 
     ? (recipeTypeParam as "A" | "B" | "C") 
@@ -123,7 +124,12 @@ export default function TaskScreen() {
 
     try {
       setIsSubmitting(true);
-      const res = await apiService.submitFindErrorsError(session, findData.attempt_id, option.label);
+      const res = await apiService.submitFindErrorsError(
+        session,
+        findData.attempt_id,
+        option.label,
+        moduleIdParam
+      );
       setOptionStatus((prev) => ({
         ...prev,
         [id]: res.correct ? "correct" : "wrong",
@@ -194,7 +200,8 @@ export default function TaskScreen() {
         const response = await apiService.submitAtendimento(
           session,
           atendimentoData.challenge_id,
-          "Resposta enviada pelo app"
+          "Resposta enviada pelo app",
+          { moduleId: moduleIdParam, scenario: atendimentoData.customer_scenario, contextType: atendimentoData.context_type }
         );
         score = response.score || 0;
       } else if (challengeTypeParam === "separacao") {
@@ -205,7 +212,8 @@ export default function TaskScreen() {
           const result = await apiService.submitSeparacaoAnswer(
             session,
             attempt.attempt_id,
-            med.category
+            med.category,
+            moduleIdParam
           );
           score = result.final_score || result.xp_earned || 0;
         }

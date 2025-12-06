@@ -168,6 +168,9 @@ export interface AtendimentoExercise {
 export interface AtendimentoSubmitRequest {
   challenge_id: number;
   response_text: string;
+  module_id?: number;
+  scenario?: string;
+  context_type?: string;
 }
 
 export interface AtendimentoResult {
@@ -425,11 +428,16 @@ export const apiService = {
    * Submeter erro por texto (found_error)
    * POST /api/challenges/find-errors/attempt/{attempt_id}/submit/
    */
-  async submitFindErrorsError(token: string, attemptId: number, foundError: string): Promise<FindErrorsSubmitResponse> {
+  async submitFindErrorsError(
+    token: string,
+    attemptId: number,
+    foundError: string,
+    moduleId?: number
+  ): Promise<FindErrorsSubmitResponse> {
     const response = await fetchWithTimeout(`${API_URL}/api/challenges/find-errors/attempt/${attemptId}/submit/`, {
       method: "POST",
       headers: authHeaders(token),
-      body: JSON.stringify({ found_error: foundError }),
+      body: JSON.stringify({ found_error: foundError, module_id: moduleId }),
     });
     return handleResponse<FindErrorsSubmitResponse>(response);
   },
@@ -485,12 +493,13 @@ export const apiService = {
   async submitSeparacaoAnswer(
     token: string,
     attemptId: number,
-    category: string
+    category: string,
+    moduleId?: number
   ): Promise<SeparacaoStepResult> {
     const response = await fetchWithTimeout(`${API_URL}/api/challenges/separacao/attempt/${attemptId}/answer/`, {
       method: "POST",
       headers: authHeaders(token),
-      body: JSON.stringify({ category }),
+      body: JSON.stringify({ category, module_id: moduleId }),
     });
     return handleResponse<SeparacaoStepResult>(response);
   },
@@ -518,7 +527,8 @@ export const apiService = {
   async submitAtendimento(
     token: string,
     challengeId: number,
-    responseText: string
+    responseText: string,
+    opts?: { moduleId?: number; scenario?: string; contextType?: string }
   ): Promise<AtendimentoResult> {
     const response = await fetchWithTimeout(`${API_URL}/api/challenges/atendimento/submit/`, {
       method: "POST",
@@ -526,6 +536,9 @@ export const apiService = {
       body: JSON.stringify({
         challenge_id: challengeId,
         response_text: responseText,
+        module_id: opts?.moduleId,
+        scenario: opts?.scenario,
+        context_type: opts?.contextType,
       }),
     });
     return handleResponse<AtendimentoResult>(response);

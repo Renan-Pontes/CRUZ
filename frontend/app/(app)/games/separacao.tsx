@@ -48,7 +48,12 @@ export default function SeparacaoScreen() {
       // Mapeia clique em A/B/C para a categoria completa do medicamento esperado
       const chosenCategory = expected && expected.startsWith(cat) ? expected : expected;
       const attemptId = (attempt as any).attempt_id ?? (attempt as any).id;
-      const res = await apiService.submitSeparacaoAnswer(session, attemptId, chosenCategory || cat);
+      const res = await apiService.submitSeparacaoAnswer(
+        session,
+        attemptId,
+        chosenCategory || cat,
+        moduleId ? Number(moduleId) : undefined
+      );
       const nextIndex = res.completed ? attempt.current_index : res.next_index;
       const updated: SeparacaoAttempt = {
         ...attempt,
