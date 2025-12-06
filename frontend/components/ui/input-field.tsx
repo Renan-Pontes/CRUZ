@@ -40,16 +40,31 @@ export const InputField = forwardRef<TextInput, InputFieldProps>(({
   error = false,
   errorMessage,
   secureTextEntry,
+  onBlur,
+  onFocus,
   ...props 
 }, ref) => {
   const [isFocused, setIsFocused] = useState(false);
   const [revealedCount, setRevealedCount] = useState(isPasswordVisible ? value.length : 0);
   const [isAnimating, setIsAnimating] = useState(false);
   
+  const innerRef = useRef<TextInput>(null);
+  const isTogglingRef = useRef(false);
+  
   // Array de animações para cada caractere (scale)
   const charAnims = useRef<Animated.Value[]>([]).current;
   
   const isPasswordField = showToggle || secureTextEntry;
+
+  // Merge refs
+  const setRef = useCallback((node: TextInput | null) => {
+    innerRef.current = node;
+    if (typeof ref === 'function') {
+      ref(node);
+    } else if (ref) {
+      (ref as any).current = node;
+    }
+  }, [ref]);
 
   // Garante que temos animações suficientes
   useEffect(() => {
@@ -78,18 +93,26 @@ export const InputField = forwardRef<TextInput, InputFieldProps>(({
   }, [charAnims]);
 
   const handleToggle = () => {
-    if (!onToggle || isAnimating || value.length === 0) {
-      onToggle?.();
-      return;
-    }
+    if (!onToggle) return;
+    
+    // Prevent focus loss
+    isTogglingRef.current = true;
+    innerRef.current?.focus();
+    
+    // Call toggle
+    onToggle();
+
+    // Reset toggling flag after a short delay
+    setTimeout(() => {
+      isTogglingRef.current = false;
+    }, 100);
+
+    if (isAnimating || value.length === 0) return;
 
     setIsAnimating(true);
     const revealing = !isPasswordVisible;
     const charCount = value.length;
     
-    // Chama toggle imediatamente para o ícone mudar
-    onToggle();
-
     if (revealing) {
       // Reveal: de 0 até length
       let current = 0;
@@ -117,6 +140,22 @@ export const InputField = forwardRef<TextInput, InputFieldProps>(({
         }
       }, CHAR_DELAY);
     }
+  };
+
+  const handleFocus = (e: any) => {
+    setIsFocused(true);
+    onFocus?.(e);
+  };
+
+  const handleBlur = (e: any) => {
+    if (isTogglingRef.current) {
+      // If we are toggling, don't lose focus state
+      // and ensure input stays focused
+      innerRef.current?.focus();
+      return;
+    }
+    setIsFocused(false);
+    onBlur?.(e);
   };
 
   // Gera a string de display baseado em quantos caracteres estão revelados
@@ -174,14 +213,17 @@ export const InputField = forwardRef<TextInput, InputFieldProps>(({
           {showAnimatedDisplay ? (
             <TouchableOpacity 
               style={styles.animatedDisplay}
-              onPress={() => setIsFocused(true)}
+              onPress={() => {
+                setIsFocused(true);
+                innerRef.current?.focus();
+              }}
               activeOpacity={1}
             >
               {renderAnimatedChars()}
             </TouchableOpacity>
           ) : (
             <TextInput
-              ref={ref}
+              ref={setRef}
               style={styles.input}
               placeholder={placeholder}
               placeholderTextColor={ICON_COLOR}
@@ -190,8 +232,8 @@ export const InputField = forwardRef<TextInput, InputFieldProps>(({
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry={isPasswordField && !isPasswordVisible}
-              onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
+              onFocus={handleFocus}
+              onBlur={handleBlur}
               {...props}
             />
           )}
