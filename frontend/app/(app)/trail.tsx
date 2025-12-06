@@ -195,6 +195,8 @@ export default function Trail() {
     })
   ).current;
 
+  const scrollViewRef = useRef<ScrollView>(null);
+
   // Gera posições em zigzag
   const generateNodes = useCallback((
     modules: Array<{ id: number; challenge_type: string; position: number }>,
@@ -204,8 +206,7 @@ export default function Trail() {
     const leftX = padding + 45;
     const rightX = SCREEN_WIDTH - padding - 45;
     const centerX = SCREEN_WIDTH / 2;
-    const startY = SCREEN_HEIGHT - 200;
-
+    
     // Se tiver poucos módulos, repete para criar trilha longa
     let expandedModules = [...modules];
     while (expandedModules.length < MIN_NODES) {
@@ -216,6 +217,10 @@ export default function Trail() {
       }));
       expandedModules = [...expandedModules, ...baseModules];
     }
+
+    // Calculate total height needed
+    // We want the first node (index 0) to be at the bottom
+    const totalHeight = expandedModules.length * VERTICAL_SPACING + 400; // Extra padding
 
     return expandedModules.map((module, index) => {
       const pattern = index % 4;
@@ -229,7 +234,9 @@ export default function Trail() {
         default: x = centerX;
       }
 
-      const y = startY - index * VERTICAL_SPACING;
+      // Calculate Y from bottom up
+      // index 0 is at totalHeight - padding
+      const y = totalHeight - 200 - (index * VERTICAL_SPACING);
       const challengeType = module.challenge_type || "find_errors";
 
       return {
@@ -368,6 +375,24 @@ export default function Trail() {
     setIsLoading(false);
     setIsRefreshing(false);
   }, [session, generateNodes, animatedPosition]);
+
+  // Auto-scroll to active node
+  useEffect(() => {
+    if (nodes.length > 0 && currentNodeIndex >= 0 && scrollViewRef.current) {
+      const node = nodes[currentNodeIndex];
+      // Scroll to center the node
+      // node.y is the position from top of content
+      // We want node.y to be at SCREEN_HEIGHT / 2
+      const scrollY = Math.max(0, node.y - SCREEN_HEIGHT / 2);
+      
+      setTimeout(() => {
+        scrollViewRef.current?.scrollTo({
+          y: scrollY,
+          animated: true,
+        });
+      }, 500); // Small delay to ensure layout is ready
+    }
+  }, [nodes, currentNodeIndex]);
 
   // Carrega dados do backend
   useEffect(() => {
@@ -544,6 +569,7 @@ export default function Trail() {
       </View>
 
       <ScrollView
+        ref={scrollViewRef}
         style={styles.scrollView}
         contentContainerStyle={{
           minHeight: contentHeight,
