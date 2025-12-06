@@ -14,8 +14,7 @@ export default function Root() {
 }
 
 function RootNavigator() {
-  // const { session } = useSession();
-  const session = true
+  const { session } = useSession();
 
   return (
     <Stack>
