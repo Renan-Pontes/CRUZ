@@ -32,6 +32,29 @@ export interface ApiError {
   [key: string]: any;
 }
 
+export interface ChallengeStartResponse {
+  attempt_id: number;
+  recipe_type: string;
+  image_path: string;
+  image_url: string;
+  options: string[];
+}
+
+export interface LearningPathModule {
+  id: number;
+  title: string;
+  challenge_type: string;
+  position: number;
+  required_exercises: number;
+}
+
+export interface LearningPathResponse {
+  id: number;
+  title: string;
+  is_active: boolean;
+  modules: LearningPathModule[];
+}
+
 // API Service
 class ApiService {
   private baseUrl: string;
@@ -103,6 +126,55 @@ class ApiService {
         const error: ApiError = await response.json();
         throw this.handleError(error);
       }
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Erro ao conectar com o servidor');
+    }
+  }
+
+  async startFindErrorsChallenges(token: string, recipe: string): Promise<ChallengeStartResponse> {
+    try {
+      const response = await fetch(`${this.baseUrl}/challenges/find-errors/start/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Session ${token}`,
+        },
+        body: JSON.stringify({ recipe_type: recipe }),
+      });
+
+      if (!response.ok) {
+        const error: ApiError = await response.json();
+        throw this.handleError(error);
+      }
+
+      return await response.json();
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Erro ao conectar com o servidor');
+    }
+  }
+
+  async getLearningPath(token: string): Promise<LearningPathResponse> {
+    try {
+      const response = await fetch(`${this.baseUrl}/learning-path/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Session ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const error: ApiError = await response.json();
+        throw this.handleError(error);
+      }
+
+      return await response.json();
     } catch (error) {
       if (error instanceof Error) {
         throw error;
