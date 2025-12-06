@@ -1,10 +1,12 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { View, StyleSheet, Dimensions, Animated } from "react-native";
 import { router } from "expo-router";
 import { TrailNode } from "../../components/trail/TrailNode";
 import { TrailPath } from "../../components/trail/TrailPath";
 import { TrailPointer } from "../../components/trail/TrailPointer";
 import { ProgressBar } from "../../components/trail/ProgressBar";
+import { apiService } from "@/services/api";
+import { useSession } from "@/auth/ctx";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -16,12 +18,19 @@ const TRAIL_NODES = [
 ];
 
 export default function Trail() {
+  const {session}= useSession();
   const [currentNodeIndex, setCurrentNodeIndex] = useState(0);
   const [completedNodes, setCompletedNodes] = useState<number[]>([0]); // Start with first node completed
   const animatedPosition = useRef(new Animated.ValueXY({
     x: TRAIL_NODES[0].x,
     y: TRAIL_NODES[0].y - 90,
   })).current;
+
+  useEffect(() => {
+    apiService.getLearningPath(session).then((response) => {
+      console.log(response);
+    });
+  }, []);
 
   const handleNodePress = (index: number) => {
     const node = TRAIL_NODES[index];
