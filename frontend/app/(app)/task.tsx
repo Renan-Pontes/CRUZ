@@ -14,6 +14,7 @@ export default function TaskScreen() {
   const [menuVisible, setMenuVisible] = React.useState(false);
   const [selectedOptions, setSelectedOptions] = React.useState<string[]>([]);
 
+  if (Platform.OS !== "web") {
   useFocusEffect(
     React.useCallback(() => {
       // 👉 Quando a tela é carregada / exibida
@@ -31,7 +32,7 @@ export default function TaskScreen() {
       };
     }, [])
   );
-
+}
   const backgroundImage = CURRENT_TASK_MOCK === 'C' 
     ? require("../../assets/images/background-em-pe.png")
     : require("../../assets/images/backgroud-task.png");
