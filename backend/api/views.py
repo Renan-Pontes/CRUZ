@@ -1,5 +1,6 @@
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import exceptions, permissions, status
 from rest_framework.decorators import (
     api_view,
@@ -10,12 +11,16 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
 
 from .authentication import SessionTokenAuthentication
+from .models import Profile
 from .security import ensure_secure_transport, issue_session, revoke_token
 from .serializers import (
     AuthSessionResponseSerializer,
+    AuthSessionSerializer,
     LoginSerializer,
     LogoutSerializer,
+    ProfileSummarySerializer,
     RegisterSerializer,
+    UserInfoResponseSerializer,
 )
 
 User = get_user_model()
@@ -187,3 +192,53 @@ def logout_view(request):
 
     logout(request)
     return Response({"detail": "Sessão encerrada."})
+
+
+@extend_schema(
+    tags=["auth"],
+    description="Retorna informações básicas do usuário autenticado e das sessões ativas.",
+    responses={200: UserInfoResponseSerializer},
+)
+@api_view(["GET"])
+@authentication_classes([SessionTokenAuthentication])
+@permission_classes([permissions.IsAuthenticated])
+def me(request):
+    ensure_secure_transport(request)
+    user = request.user
+    try:
+        profile = user.profile
+    except Profile.DoesNotExist:
+        profile = None
+    sessions = (
+        user.auth_sessions.filter(revoked=False, expires_at__gt=timezone.now())
+        .order_by("-last_seen", "-created_at")
+    )
+
+    serializer = UserInfoResponseSerializer(
+        {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "date_joined": user.date_joined,
+            "last_login": user.last_login,
+            "profile": profile,
+            "sessions": sessions,
+        }
+    )
+    return Response(serializer.data)
+
+
+@extend_schema(
+    tags=["auth"],
+    description="Detalhes da sessão associada ao token enviado no header.",
+    responses={200: AuthSessionSerializer},
+)
+@api_view(["GET"])
+@authentication_classes([SessionTokenAuthentication])
+@permission_classes([permissions.IsAuthenticated])
+def current_session(request):
+    ensure_secure_transport(request)
+    session = request.auth
+    if not session:
+        raise exceptions.NotAuthenticated("Token de sessão ausente.")
+    return Response(AuthSessionSerializer(session).data)

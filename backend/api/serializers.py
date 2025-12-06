@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
+from .models import AuthSession, Profile
 
 User = get_user_model()
 
@@ -25,3 +26,41 @@ class AuthSessionResponseSerializer(serializers.Serializer):
 
 class LogoutSerializer(serializers.Serializer):
     all_devices = serializers.BooleanField(default=False)
+
+
+class ProfileSummarySerializer(serializers.ModelSerializer):
+    badges = serializers.SlugRelatedField(many=True, read_only=True, slug_field="name")
+
+    class Meta:
+        model = Profile
+        fields = ["experience_points", "level", "streak", "badges"]
+
+
+class AuthSessionSerializer(serializers.ModelSerializer):
+    is_active = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuthSession
+        fields = [
+            "id",
+            "created_at",
+            "expires_at",
+            "revoked",
+            "user_agent",
+            "last_ip",
+            "last_seen",
+            "is_active",
+        ]
+
+    def get_is_active(self, obj):
+        return obj.is_active()
+
+
+class UserInfoResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    email = serializers.EmailField()
+    date_joined = serializers.DateTimeField()
+    last_login = serializers.DateTimeField(allow_null=True)
+    profile = ProfileSummarySerializer(allow_null=True)
+    sessions = AuthSessionSerializer(many=True)
