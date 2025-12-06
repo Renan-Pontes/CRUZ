@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   View,
   StyleSheet,
@@ -9,6 +9,7 @@ import {
   Text,
   Modal,
   Easing,
+  Alert,
 } from "react-native";
 import { router } from "expo-router";
 import { TrailPath } from "../../components/trail/TrailPath";
@@ -22,6 +23,7 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // Configurações
 const VERTICAL_SPACING = 200;
 const NODE_SIZE = 90;
+const MIN_NODES = 15; // Mínimo de nodes para parecer infinito
 
 // Tipos
 interface TrailNodeData {
@@ -29,8 +31,10 @@ interface TrailNodeData {
   x: number;
   y: number;
   icon: "document" | "brain" | "pill" | null;
+  challengeType: string;
   isCompleted: boolean;
   isLocked: boolean;
+  moduleId?: number;
 }
 
 // Ícones
@@ -44,6 +48,12 @@ const CHALLENGE_ICON_MAP: Record<string, "document" | "brain" | "pill"> = {
   find_errors: "document",
   atendimento: "brain",
   separacao: "pill",
+};
+
+const CHALLENGE_NAMES: Record<string, string> = {
+  find_errors: "Encontre os Erros",
+  atendimento: "Atendimento ao Cliente",
+  separacao: "Separação de Medicamentos",
 };
 
 // ============ COMPONENTE TRAIL NODE ============
@@ -61,7 +71,6 @@ function TrailNodeItem({
   const scaleAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  // Animação de entrada
   useEffect(() => {
     Animated.spring(scaleAnim, {
       toValue: 1,
@@ -72,7 +81,6 @@ function TrailNodeItem({
     }).start();
   }, []);
 
-  // Pulse no ativo
   useEffect(() => {
     if (isActive && !node.isLocked) {
       const pulse = Animated.loop(
@@ -131,218 +139,240 @@ function TrailNodeItem({
 
 // ============ COMPONENTE PRINCIPAL ============
 export default function Trail() {
-  const { session } = useSession();
+  const { session, signOut } = useSession();
   const [nodes, setNodes] = useState<TrailNodeData[]>([]);
   const [currentNodeIndex, setCurrentNodeIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   
   // Modal state
   const [showModal, setShowModal] = useState(false);
-  const [selectedNodeIndex, setSelectedNodeIndex] = useState<number | null>(null);
+  const [selectedNode, setSelectedNode] = useState<TrailNodeData | null>(null);
   
   // User info state
   const [userInfo, setUserInfo] = useState({
     email: "",
     xp: 0,
     level: 1,
+    streak: 0,
   });
-  
-  // Animações
-  const walkAnim = useRef(new Animated.Value(0)).current;
-  const isWalking = useRef(false);
 
   const animatedPosition = useRef(
     new Animated.ValueXY({
       x: SCREEN_WIDTH / 2 - 30,
-      y: SCREEN_HEIGHT - 150 - 95,
+      y: SCREEN_HEIGHT - 200 - 95,
     })
   ).current;
 
   // Gera posições em zigzag
-  const generateNodes = (count: number, types: string[]): TrailNodeData[] => {
+  const generateNodes = useCallback((
+    modules: Array<{ id: number; challenge_type: string; position: number }>,
+    completedCount: number
+  ): TrailNodeData[] => {
     const padding = 50;
-    const leftX = padding + 35;
-    const rightX = SCREEN_WIDTH - padding - 35;
+    const leftX = padding + 45;
+    const rightX = SCREEN_WIDTH - padding - 45;
     const centerX = SCREEN_WIDTH / 2;
-    const startY = SCREEN_HEIGHT - 150;
+    const startY = SCREEN_HEIGHT - 200;
 
-    return Array.from({ length: count }, (_, index) => {
+    // Se tiver poucos módulos, repete para criar trilha longa
+    let expandedModules = [...modules];
+    while (expandedModules.length < MIN_NODES) {
+      const baseModules = modules.map((m, i) => ({
+        ...m,
+        id: m.id + 1000 * Math.floor(expandedModules.length / modules.length) + i,
+        position: expandedModules.length + i,
+      }));
+      expandedModules = [...expandedModules, ...baseModules];
+    }
+
+    return expandedModules.map((module, index) => {
       const pattern = index % 4;
       let x: number;
 
       switch (pattern) {
         case 0: x = leftX; break;
-        case 1: x = centerX + 30; break;
+        case 1: x = centerX + 40; break;
         case 2: x = rightX; break;
-        case 3: x = centerX - 30; break;
+        case 3: x = centerX - 40; break;
         default: x = centerX;
       }
 
       const y = startY - index * VERTICAL_SPACING;
-      const challengeType = types[index] || "find_errors";
+      const challengeType = module.challenge_type || "find_errors";
 
       return {
-        id: index + 1,
+        id: module.id,
         x,
         y,
         icon: CHALLENGE_ICON_MAP[challengeType] || "document",
-        isCompleted: index < currentNodeIndex,
-        isLocked: index > currentNodeIndex + 1,
+        challengeType,
+        isCompleted: index < completedCount,
+        isLocked: index > completedCount, // Só o atual está desbloqueado
+        moduleId: module.id,
       };
     });
-  };
+  }, []);
 
-  // Carrega dados da API ou usa demo
+  // Carrega dados do backend
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
       
       try {
         if (session) {
-          // Carrega perfil do usuário
+          // 1. Carrega perfil do usuário (XP, level, etc) via /api/auth/me/
           try {
-            const profile = await apiService.getProfile(session);
+            const meResponse = await apiService.getMe(session);
             setUserInfo({
-              email: profile.email || session.split("@")[0] + "@cs.cruzeirodosul.edu.br",
-              xp: profile.xp_total || 0,
-              level: profile.level || 1,
+              email: meResponse.email || "",
+              xp: meResponse.profile?.experience_points || 0,
+              level: meResponse.profile?.level || 1,
+              streak: meResponse.profile?.streak || 0,
             });
           } catch (e) {
-            // Fallback: usa session como email
-            setUserInfo(prev => ({ ...prev, email: "estudante@cs.cruzeirodosul.edu.br" }));
+            console.log("Erro ao carregar perfil:", e);
           }
           
-          // Carrega learning path
-          const response = await apiService.getLearningPath(session);
-          
-          if (response.modules && response.modules.length > 0) {
-            const sortedModules = [...response.modules].sort((a, b) => a.position - b.position);
-            const types = sortedModules.map(m => m.challenge_type);
-            const generatedNodes = generateNodes(sortedModules.length, types);
-            setNodes(generatedNodes);
-            setIsLoading(false);
-            return;
+          // 2. Carrega learning path
+          try {
+            const pathResponse = await apiService.getLearningPath(session);
+            
+            if (pathResponse.modules && pathResponse.modules.length > 0) {
+              const sortedModules = [...pathResponse.modules].sort(
+                (a, b) => a.position - b.position
+              );
+              
+              // 3. Carrega atividades para determinar progresso
+              let completedCount = 0;
+              try {
+                const activities = await apiService.getActivity(session);
+                // Conta quantos desafios foram completados
+                const completedChallenges = activities.filter(
+                  (act: any) => act.activity_type === "challenge_completed"
+                );
+                completedCount = Math.min(completedChallenges.length, sortedModules.length);
+              } catch (e) {
+                console.log("Erro ao carregar atividades:", e);
+              }
+              
+              const generatedNodes = generateNodes(sortedModules, completedCount);
+              setNodes(generatedNodes);
+              setCurrentNodeIndex(completedCount);
+              
+              // Posiciona mascote no node atual
+              if (generatedNodes[completedCount]) {
+                const node = generatedNodes[completedCount];
+                animatedPosition.setValue({
+                  x: node.x - 30,
+                  y: node.y - 95,
+                });
+              }
+              
+              setIsLoading(false);
+              return;
+            }
+          } catch (e) {
+            console.log("Erro ao carregar trilha:", e);
           }
         }
       } catch (error) {
-        console.log("Usando dados demo:", error);
+        console.log("Erro geral:", error);
       }
 
       // Fallback: dados demo
-      const demoTypes = ["find_errors", "separacao", "atendimento", "find_errors", "separacao"];
-      setNodes(generateNodes(5, demoTypes));
+      const demoModules = [
+        { id: 1, challenge_type: "find_errors", position: 0 },
+        { id: 2, challenge_type: "separacao", position: 1 },
+        { id: 3, challenge_type: "atendimento", position: 2 },
+        { id: 4, challenge_type: "find_errors", position: 3 },
+        { id: 5, challenge_type: "separacao", position: 4 },
+      ];
+      
+      const demoNodes = generateNodes(demoModules, 0);
+      setNodes(demoNodes);
+      setCurrentNodeIndex(0);
+      
+      // Posiciona mascote
+      if (demoNodes[0]) {
+        animatedPosition.setValue({
+          x: demoNodes[0].x - 30,
+          y: demoNodes[0].y - 95,
+        });
+      }
+      
       setUserInfo({
         email: "estudante@cs.cruzeirodosul.edu.br",
-        xp: 250,
-        level: 3,
+        xp: 0,
+        level: 1,
+        streak: 0,
       });
+      
       setIsLoading(false);
     };
 
     loadData();
-  }, [session]);
+  }, [session, generateNodes]);
 
-  // Atualiza estados dos nodes quando currentNodeIndex muda
-  useEffect(() => {
-    setNodes(prev => prev.map((node, index) => ({
-      ...node,
-      isCompleted: index < currentNodeIndex,
-      isLocked: index > currentNodeIndex + 1,
-    })));
-  }, [currentNodeIndex]);
-
-  // Atualiza posição do mascote
-  useEffect(() => {
-    if (nodes.length > 0 && nodes[currentNodeIndex]) {
-      const node = nodes[currentNodeIndex];
-      Animated.spring(animatedPosition, {
-        toValue: {
-          x: node.x - 30,
-          y: node.y - 95,
-        },
-        friction: 7,
-        tension: 40,
-        useNativeDriver: false,
-      }).start();
-    }
-  }, [currentNodeIndex, nodes]);
-
-  // Handler de clique
+  // Handler de clique no node
   const handleNodePress = (index: number) => {
     const node = nodes[index];
-    if (node.isLocked || isWalking.current) return;
+    if (node.isLocked) return;
 
-    isWalking.current = true;
-    setSelectedNodeIndex(index);
-
-    // Animação de "caminhada" (balançando)
-    const walkAnimation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(walkAnim, {
-          toValue: 1,
-          duration: 150,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(walkAnim, {
-          toValue: -1,
-          duration: 150,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    
-    walkAnimation.start();
-
-    // Move o mascote
-    Animated.timing(animatedPosition, {
-      toValue: {
-        x: node.x - 30,
-        y: node.y - 95,
-      },
-      duration: 800,
-      easing: Easing.inOut(Easing.ease),
-      useNativeDriver: false,
-    }).start(() => {
-      // Para a animação de caminhada
-      walkAnimation.stop();
-      walkAnim.setValue(0);
-      isWalking.current = false;
-      
-      // Mostra o modal
-      setShowModal(true);
-    });
-
-    setCurrentNodeIndex(index);
+    // Mostra modal para o node clicado
+    setSelectedNode(node);
+    setShowModal(true);
   };
   
   // Confirmar início do exercício
   const handleStartExercise = () => {
     setShowModal(false);
-    router.push("/(app)/task");
-  };
-  
-  // Cancelar
-  const handleCancelExercise = () => {
-    setShowModal(false);
-    setSelectedNodeIndex(null);
-  };
-  
-  // Pega nome do exercício selecionado
-  const getExerciseName = () => {
-    if (selectedNodeIndex === null || !nodes[selectedNodeIndex]) return "Exercício";
-    const icon = nodes[selectedNodeIndex].icon;
-    switch (icon) {
-      case "document": return "Encontre os Erros";
-      case "pill": return "Separação de Medicamentos";
-      case "brain": return "Atendimento ao Cliente";
-      default: return "Exercício";
+    
+    if (selectedNode) {
+      // Navega para task com o tipo de desafio
+      router.push({
+        pathname: "/(app)/task",
+        params: { 
+          challengeType: selectedNode.challengeType,
+          moduleId: selectedNode.moduleId?.toString(),
+        },
+      });
     }
   };
+  
+  // Cancelar - NÃO avança o progresso
+  const handleCancelExercise = () => {
+    setShowModal(false);
+    setSelectedNode(null);
+    // Não faz nada mais - mantém o estado atual
+  };
+  
+  // Logout
+  const handleLogout = async () => {
+    Alert.alert(
+      "Sair",
+      "Deseja realmente sair da sua conta?",
+      [
+        { text: "Cancelar", style: "cancel" },
+        { 
+          text: "Sair", 
+          style: "destructive",
+          onPress: async () => {
+            try {
+              if (session) {
+                await apiService.logout(session);
+              }
+            } catch (e) {
+              console.log("Erro no logout:", e);
+            }
+            signOut();
+          }
+        },
+      ]
+    );
+  };
 
-  const progress = nodes.length > 0 ? currentNodeIndex / nodes.length : 0;
-  const contentHeight = nodes.length * VERTICAL_SPACING + 300;
+  const progress = nodes.length > 0 ? currentNodeIndex / Math.min(nodes.length, 10) : 0;
+  const contentHeight = nodes.length * VERTICAL_SPACING + 400;
 
   if (isLoading) {
     return (
@@ -356,21 +386,33 @@ export default function Trail() {
     <View style={styles.container}>
       {/* Header com info do usuário */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
+        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+          <Text style={styles.logoutText}>Sair</Text>
+        </TouchableOpacity>
+        
+        <View style={styles.headerCenter}>
           <Text style={styles.headerEmail} numberOfLines={1}>
             {userInfo.email}
           </Text>
         </View>
+        
         <View style={styles.headerRight}>
           <View style={styles.statBadge}>
             <Text style={styles.statIcon}>⭐</Text>
-            <Text style={styles.statValue}>{userInfo.xp} XP</Text>
+            <Text style={styles.statValue}>{userInfo.xp}</Text>
           </View>
           <View style={styles.levelBadge}>
-            <Text style={styles.levelText}>Nv. {userInfo.level}</Text>
+            <Text style={styles.levelText}>Nv.{userInfo.level}</Text>
           </View>
         </View>
       </View>
+      
+      {/* Streak indicator */}
+      {userInfo.streak > 0 && (
+        <View style={styles.streakBanner}>
+          <Text style={styles.streakText}>🔥 {userInfo.streak} dias seguidos!</Text>
+        </View>
+      )}
       
       <ScrollView
         style={styles.scrollView}
@@ -383,7 +425,7 @@ export default function Trail() {
         {/* Nodes */}
         {nodes.map((node, index) => (
           <TrailNodeItem
-            key={node.id}
+            key={`node-${node.id}-${index}`}
             node={node}
             index={index}
             isActive={index === currentNodeIndex}
@@ -391,7 +433,7 @@ export default function Trail() {
           />
         ))}
 
-        {/* Mascote com animação de caminhada */}
+        {/* Mascote */}
         <Animated.View
           style={[
             styles.mascotContainer,
@@ -399,10 +441,6 @@ export default function Trail() {
               transform: [
                 { translateX: animatedPosition.x },
                 { translateY: animatedPosition.y },
-                { rotate: walkAnim.interpolate({
-                  inputRange: [-1, 0, 1],
-                  outputRange: ['-8deg', '0deg', '8deg'],
-                })},
               ],
             },
           ]}
@@ -412,7 +450,7 @@ export default function Trail() {
       </ScrollView>
 
       {/* Progress bar */}
-      <ProgressBar progress={progress} />
+      <ProgressBar progress={Math.min(progress, 1)} />
       
       {/* Modal de confirmação */}
       <Modal
@@ -423,9 +461,13 @@ export default function Trail() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalEmoji}>🎯</Text>
+            <Text style={styles.modalEmoji}>
+              {selectedNode?.icon ? ICON_EMOJI[selectedNode.icon] : "🎯"}
+            </Text>
             <Text style={styles.modalTitle}>Pronto para começar?</Text>
-            <Text style={styles.modalSubtitle}>{getExerciseName()}</Text>
+            <Text style={styles.modalSubtitle}>
+              {selectedNode ? CHALLENGE_NAMES[selectedNode.challengeType] || "Exercício" : "Exercício"}
+            </Text>
             
             <TouchableOpacity 
               style={styles.modalButtonPrimary}
@@ -468,51 +510,74 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingTop: 50,
     paddingBottom: 12,
-    backgroundColor: "rgba(0,0,0,0.2)",
+    backgroundColor: "rgba(0,0,0,0.3)",
   },
-  headerLeft: {
+  logoutButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    borderRadius: 8,
+  },
+  logoutText: {
+    color: "#FF6B6B",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  headerCenter: {
     flex: 1,
-    marginRight: 12,
+    marginHorizontal: 8,
   },
   headerEmail: {
-    color: "rgba(255,255,255,0.8)",
-    fontSize: 14,
+    color: "rgba(255,255,255,0.7)",
+    fontSize: 12,
+    textAlign: "center",
   },
   headerRight: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 6,
   },
   statBadge: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.15)",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 12,
+    gap: 3,
   },
   statIcon: {
-    fontSize: 14,
+    fontSize: 12,
   },
   statValue: {
     color: "#FFD166",
-    fontSize: 14,
-    fontWeight: "600",
+    fontSize: 13,
+    fontWeight: "700",
   },
   levelBadge: {
     backgroundColor: "#87dbba",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
   },
   levelText: {
     color: "#1a3a2f",
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "700",
+  },
+  // Streak banner
+  streakBanner: {
+    backgroundColor: "rgba(255, 107, 107, 0.2)",
+    paddingVertical: 6,
+    alignItems: "center",
+  },
+  streakText: {
+    color: "#FFD166",
+    fontSize: 14,
+    fontWeight: "600",
   },
   // Mascot container
   mascotContainer: {
@@ -520,65 +585,6 @@ const styles = StyleSheet.create({
     width: 60,
     height: 75,
     zIndex: 1000,
-  },
-  // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-  },
-  modalContent: {
-    backgroundColor: "#ffffff",
-    borderRadius: 24,
-    padding: 32,
-    alignItems: "center",
-    width: "100%",
-    maxWidth: 320,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 20,
-  },
-  modalEmoji: {
-    fontSize: 48,
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "#364A5E",
-    marginBottom: 8,
-    textAlign: "center",
-  },
-  modalSubtitle: {
-    fontSize: 16,
-    color: "#666",
-    marginBottom: 24,
-    textAlign: "center",
-  },
-  modalButtonPrimary: {
-    backgroundColor: "#87dbba",
-    paddingVertical: 16,
-    paddingHorizontal: 48,
-    borderRadius: 30,
-    width: "100%",
-    marginBottom: 12,
-  },
-  modalButtonPrimaryText: {
-    color: "#1a3a2f",
-    fontSize: 18,
-    fontWeight: "700",
-    textAlign: "center",
-  },
-  modalButtonSecondary: {
-    paddingVertical: 12,
-  },
-  modalButtonSecondaryText: {
-    color: "#999",
-    fontSize: 16,
   },
   // Node styles
   nodeContainer: {
@@ -622,4 +628,63 @@ const styles = StyleSheet.create({
   nodeIconLocked: {
     fontSize: 28,
   },
-});
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: "#ffffff",
+    borderRadius: 24,
+    padding: 32,
+    alignItems: "center",
+    width: "100%",
+    maxWidth: 320,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  modalEmoji: {
+    fontSize: 56,
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#364A5E",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  modalSubtitle: {
+    fontSize: 16,
+    color: "#666",
+    marginBottom: 24,
+    textAlign: "center",
+  },
+  modalButtonPrimary: {
+    backgroundColor: "#87dbba",
+    paddingVertical: 16,
+    paddingHorizontal: 48,
+    borderRadius: 30,
+    width: "100%",
+    marginBottom: 12,
+  },
+  modalButtonPrimaryText: {
+    color: "#1a3a2f",
+    fontSize: 18,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  modalButtonSecondary: {
+    paddingVertical: 12,
+  },
+  modalButtonSecondaryText: {
+    color: "#999",
+    fontSize: 16,
+  },
+}); 

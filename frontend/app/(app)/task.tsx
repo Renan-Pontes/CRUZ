@@ -1,5 +1,5 @@
 import React from "react";
-import { View, StyleSheet, ScrollView, TouchableOpacity, ImageBackground, Image } from "react-native";
+import { View, StyleSheet, ScrollView, TouchableOpacity, ImageBackground, Image, Platform } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { ThemedText } from "../../components/themed-text";
