@@ -19,24 +19,18 @@ export default function Trail() {
   const [currentNodeIndex, setCurrentNodeIndex] = useState(0);
   const [completedNodes, setCompletedNodes] = useState<number[]>([0]); // Start with first node completed
   const animatedPosition = useRef(new Animated.ValueXY({
-    x: TRAIL_NODES[0].x - 20,
-    y: TRAIL_NODES[0].y - 60,
+    x: TRAIL_NODES[0].x,
+    y: TRAIL_NODES[0].y - 90,
   })).current;
 
   const handleNodePress = (index: number) => {
     const node = TRAIL_NODES[index];
-    
-    // Navigate to task screen if clicking first node
-    if (index === 0) {
-      router.push("/(app)/task");
-      return;
-    }
-    
+
     // Animate pointer to new position
     Animated.timing(animatedPosition, {
       toValue: {
-        x: node.x - 20, // Offset to center pointer on node
-        y: node.y - 60, // Offset to position above node
+        x: node.x , // Offset to center pointer on node
+        y: node.y - 90, // Offset to position above node
       },
       duration: 500,
       useNativeDriver: false,
@@ -48,6 +42,12 @@ export default function Trail() {
     // Mark nodes from start up to current as completed
     const newCompleted = Array.from({ length: index + 1 }, (_, i) => i);
     setCompletedNodes(newCompleted);
+    
+    // Navigate to task screen if clicking first node
+    if (index === 0) {
+      router.push("/(app)/task");
+      return;
+    }
   };
 
   const progress = completedNodes.length / TRAIL_NODES.length;
