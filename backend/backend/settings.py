@@ -152,10 +152,10 @@ SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
-# CORS liberado para o dev server do frontend (localhost:8081 por padrão).
+# CORS liberado para o dev server do frontend (localhost:8081 por padrão). adicionar 8082
 _cors_origins_env = os.environ.get(
     'CORS_ALLOWED_ORIGINS',
-    'http://localhost:8081,http://127.0.0.1:8081',
+    'http://localhost:8081,http://localhost:8082'
 )
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in _cors_origins_env.split(',') if origin.strip()]
 
