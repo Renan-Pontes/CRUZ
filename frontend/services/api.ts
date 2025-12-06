@@ -1,13 +1,10 @@
 import { Platform } from 'react-native';
 
 // API Configuration
-// Para Android Emulator: use 10.0.2.2
-// Para iOS Simulator: use localhost ou 127.0.0.1
-// Para dispositivo físico: use o IP da sua máquina na rede local
 const API_BASE_URL = __DEV__
   ? Platform.OS === "android"
-    ? "http://127.0.0.1:8000/api"
-    : "http://127.0.0.1:8000/api"
+    ? "http://10.0.2.2:8000/api"  // Android Emulator
+    : "http://127.0.0.1:8000/api" // iOS Simulator
   : "https://your-production-api.com/api";
 
 // Types
@@ -55,6 +52,22 @@ export interface LearningPathResponse {
   modules: LearningPathModule[];
 }
 
+export interface ProfileResponse {
+  experience_points: number;
+  level: number;
+  streak: number;
+  badges: string[];
+}
+
+export interface UserResponse {
+  id: number;
+  username: string;
+  email: string;
+  date_joined: string;
+  last_login: string | null;
+  profile: ProfileResponse | null;
+}
+
 // API Service
 class ApiService {
   private baseUrl: string;
@@ -63,128 +76,172 @@ class ApiService {
     this.baseUrl = baseUrl;
   }
 
-  async register(data: RegisterRequest): Promise<AuthResponse> {
-    try {
-      const response = await fetch(`${this.baseUrl}/auth/register/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      });
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit = {},
+    token?: string | null
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...((options.headers as Record<string, string>) || {}),
+    };
 
-      if (!response.ok) {
-        const error: ApiError = await response.json();
-        throw this.handleError(error);
-      }
-
-      return await response.json();
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error('Erro ao conectar com o servidor');
+    if (token) {
+      headers['Authorization'] = `Session ${token}`;
     }
+
+    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+      ...options,
+      headers,
+    });
+
+    if (!response.ok) {
+      const error: ApiError = await response.json().catch(() => ({}));
+      throw this.handleError(error);
+    }
+
+    return response.json();
+  }
+
+  async register(data: RegisterRequest): Promise<AuthResponse> {
+    return this.request<AuthResponse>('/auth/register/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 
   async login(email: string, password: string): Promise<AuthResponse> {
-    try {
-      const response = await fetch(`${this.baseUrl}/auth/login/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
-
-      if (!response.ok) {
-        const error: ApiError = await response.json();
-        throw this.handleError(error);
-      }
-
-      return await response.json();
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error('Erro ao conectar com o servidor');
-    }
+    return this.request<AuthResponse>('/auth/login/', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
   }
 
   async logout(token: string, allDevices: boolean = false): Promise<void> {
-    try {
-      const response = await fetch(`${this.baseUrl}/auth/logout/`, {
+    await this.request<{ detail: string }>(
+      '/auth/logout/',
+      {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Session ${token}`,
-        },
         body: JSON.stringify({ all_devices: allDevices }),
-      });
-
-      if (!response.ok) {
-        const error: ApiError = await response.json();
-        throw this.handleError(error);
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error('Erro ao conectar com o servidor');
-    }
+      },
+      token
+    );
   }
 
-  async startFindErrorsChallenges(token: string, recipe: string): Promise<ChallengeStartResponse> {
-    try {
-      const response = await fetch(`${this.baseUrl}/challenges/find-errors/start/`, {
+  async getMe(token: string): Promise<UserResponse> {
+    return this.request<UserResponse>('/auth/me/', { method: 'GET' }, token);
+  }
+
+  async getLearningPath(token: string | null): Promise<LearningPathResponse> {
+    return this.request<LearningPathResponse>(
+      '/learning-path/',
+      { method: 'GET' },
+      token
+    );
+  }
+
+  async startFindErrorsChallenge(
+    token: string,
+    recipeType?: string
+  ): Promise<ChallengeStartResponse> {
+    const params = recipeType ? `?recipe_type=${recipeType}` : '';
+    return this.request<ChallengeStartResponse>(
+      `/challenges/find-errors/start/${params}`,
+      { method: 'POST' },
+      token
+    );
+  }
+
+  async submitFindErrorsAnswer(
+    token: string,
+    attemptId: number,
+    foundError: string
+  ): Promise<{ correct: boolean; completed: boolean }> {
+    return this.request(
+      `/challenges/find-errors/attempt/${attemptId}/submit/`,
+      {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Session ${token}`,
-        },
-        body: JSON.stringify({ recipe_type: recipe }),
-      });
-
-      if (!response.ok) {
-        const error: ApiError = await response.json();
-        throw this.handleError(error);
-      }
-
-      return await response.json();
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error('Erro ao conectar com o servidor');
-    }
+        body: JSON.stringify({ found_error: foundError }),
+      },
+      token
+    );
   }
 
-  async getLearningPath(token: string): Promise<LearningPathResponse> {
-    try {
-      const response = await fetch(`${this.baseUrl}/learning-path/`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Session ${token}`,
-        },
-      });
+  async startSeparacaoChallenge(
+    token: string,
+    count?: number
+  ): Promise<{
+    id: number;
+    medications: Array<{ id: number; name: string; category: string }>;
+    current_index: number;
+    total: number;
+  }> {
+    const params = count ? `?count=${count}` : '';
+    return this.request(
+      `/challenges/separacao/start/${params}`,
+      { method: 'POST' },
+      token
+    );
+  }
 
-      if (!response.ok) {
-        const error: ApiError = await response.json();
-        throw this.handleError(error);
-      }
+  async submitSeparacaoAnswer(
+    token: string,
+    attemptId: number,
+    medicationId: number,
+    chosenCategory: string
+  ): Promise<{
+    correct: boolean;
+    expected: string;
+    completed: boolean;
+    accuracy: number;
+  }> {
+    return this.request(
+      `/challenges/separacao/attempt/${attemptId}/answer/`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          medication_id: medicationId,
+          chosen_category: chosenCategory,
+        }),
+      },
+      token
+    );
+  }
 
-      return await response.json();
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error('Erro ao conectar com o servidor');
-    }
+  async getAtendimentoExercise(
+    token: string
+  ): Promise<{
+    challenge_id: number;
+    customer_scenario: string;
+    context_type: string;
+  }> {
+    return this.request('/challenges/atendimento/', { method: 'GET' }, token);
+  }
+
+  async submitAtendimentoResponse(
+    token: string,
+    challengeId: number,
+    responseText: string
+  ): Promise<{
+    score: number;
+    content_score: number;
+    clarity_score: number;
+    feedback: string[];
+  }> {
+    return this.request(
+      '/challenges/atendimento/submit/',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          challenge_id: challengeId,
+          response_text: responseText,
+        }),
+      },
+      token
+    );
   }
 
   private handleError(error: ApiError): Error {
-    // Handle specific field errors
     if (error.email && Array.isArray(error.email)) {
       return new Error(error.email[0]);
     }
@@ -194,13 +251,9 @@ class ApiService {
     if (error.username && Array.isArray(error.username)) {
       return new Error(error.username[0]);
     }
-    
-    // Handle general error
     if (error.detail) {
       return new Error(error.detail);
     }
-
-    // Fallback error message
     return new Error('Ocorreu um erro. Tente novamente.');
   }
 }

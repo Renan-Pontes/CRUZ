@@ -1,51 +1,57 @@
 import React from "react";
-import { View, StyleSheet, TouchableOpacity, Text } from "react-native";
+import { StyleSheet } from "react-native";
+import Svg, { Path } from "react-native-svg";
 
-type IconName = "document" | "brain" | null;
-
-interface TrailNodeProps {
-  x: number;
-  y: number;
-  icon: IconName;
-  completed: boolean;
-  isActive: boolean;
-  onPress: () => void;
+interface TrailPathProps {
+  nodes: Array<{ x: number; y: number }>;
+  completedCount?: number;
 }
 
-export function TrailNode({ x, y, icon, completed, isActive, onPress }: TrailNodeProps) {
-  const iconChar =
-    icon === "document" ? "📄" : icon === "brain" ? "🧠" : "•";
+export function TrailPath({ nodes, completedCount = 0 }: TrailPathProps) {
+  if (nodes.length < 2) return null;
+
+  // Cria path curvo passando por todos os nodes
+  let pathData = `M ${nodes[0].x} ${nodes[0].y}`;
+
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const current = nodes[i];
+    const next = nodes[i + 1];
+
+    // Ponto de controle para curva suave - alternando lados
+    const controlX = (current.x + next.x) / 2 + (i % 2 === 0 ? 30 : -30);
+    const controlY = (current.y + next.y) / 2;
+
+    pathData += ` Q ${controlX} ${controlY}, ${next.x} ${next.y}`;
+  }
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.8}
-      onPress={onPress}
-      style={[
-        styles.node,
-        {
-          left: x - 24,
-          top: y - 24,
-          backgroundColor: completed ? "#87dbba" : "#ffffff33",
-          borderColor: isActive ? "#FFD166" : "rgba(255,255,255,0.3)",
-        },
-      ]}
-    >
-      <Text style={styles.icon}>{iconChar}</Text>
-    </TouchableOpacity>
+    <Svg style={StyleSheet.absoluteFill} width="100%" height="100%">
+      {/* Caminho de fundo (sombra) */}
+      <Path
+        d={pathData}
+        stroke="rgba(0, 0, 0, 0.2)"
+        strokeWidth={14}
+        fill="none"
+        strokeLinecap="round"
+      />
+      
+      {/* Caminho principal */}
+      <Path
+        d={pathData}
+        stroke="#FFC107"
+        strokeWidth={10}
+        fill="none"
+        strokeLinecap="round"
+      />
+      
+      {/* Linha interna mais clara */}
+      <Path
+        d={pathData}
+        stroke="#FFD54F"
+        strokeWidth={4}
+        fill="none"
+        strokeLinecap="round"
+      />
+    </Svg>
   );
 }
-
-const styles = StyleSheet.create({
-  node: {
-    position: "absolute",
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 2,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  icon: {
-    fontSize: 20,
-  },
-});
