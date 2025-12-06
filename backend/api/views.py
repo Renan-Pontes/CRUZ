@@ -192,6 +192,13 @@ def _ensure_profile(user):
     return profile
 
 
+def _ensure_learning_path(user):
+    path, _ = LearningPath.objects.get_or_create(
+        user=user, defaults={"title": "Trilha personalizada"}
+    )
+    return path
+
+
 def _sample_medications(count: int):
     meds = list(Medication.objects.values("id", "name", "category"))
     if not meds:
@@ -493,6 +500,8 @@ def register(request):
             email=email,
             password=serializer.validated_data["password"],
         )
+        _ensure_profile(user)
+        _ensure_learning_path(user)
 
     token, expires_at = issue_session(
         user=user,

@@ -18,7 +18,6 @@ export function TrailPointer({ position }: TrailPointerProps) {
         },
       ]}
     >
-      <Image source={require("../../assets/images/mascote.png")} style={{ width: 60, height: 70 }} resizeMode="contain" />
     </Animated.View>
   );
 }
